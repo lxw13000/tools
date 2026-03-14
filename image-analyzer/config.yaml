@@ -1,0 +1,62 @@
+# 图片分析系统配置文件
+
+# 服务器配置
+server:
+  host: "0.0.0.0"
+  port: 5000
+  debug: false
+  max_content_length: 52428800  # 50MB in bytes
+
+# 上传配置
+upload:
+  folder: "/tmp/uploads"
+  allowed_extensions:
+    - png
+    - jpg
+    - jpeg
+    - gif
+    - bmp
+    - webp
+
+# 动态检测配置
+motion_detection:
+  # 相似度阈值：高于此值认为是静态图片
+  similarity_threshold: 0.95
+
+# NSFW 检测配置
+nsfw_detection:
+  # MobileNet V2 140 (5-class) 阈值
+  thresholds:
+    porn: 0.6           # 色情 > 此值 → 拦截
+    hentai: 0.5         # 动漫色情 > 此值 → 复审
+    sexy: 0.7           # 性感 > 此值 → 复审
+    porn_hentai: 0.65   # 色情+动漫 组合 > 此值 → 拦截
+
+  # OpenNSFW2 (Yahoo) 阈值
+  opennsfw2:
+    thresholds:
+      nsfw_block: 0.8   # NSFW >= 此值 → 拦截
+      nsfw_review: 0.5  # NSFW >= 此值 → 复审
+
+  # Falconsai ViT 阈值
+  falconsai:
+    thresholds:
+      nsfw_block: 0.8   # NSFW >= 此值 → 拦截
+      nsfw_review: 0.5  # NSFW >= 此值 → 复审
+
+  # 多模型融合配置
+  fusion:
+    weights:
+      opennsfw2: 0.25   # OpenNSFW2 权重
+      mobilenet: 0.30   # MobileNet V2 140 权重
+      falconsai: 0.45   # Falconsai ViT 权重（最准确，权重最高）
+    thresholds:
+      block: 0.7        # 融合分数 >= 此值 → 拦截
+      review: 0.4       # 融合分数 >= 此值 → 复审
+    strategy: "weighted_average"  # weighted_average | any_block | majority
+
+  # 处理动作
+  actions:
+    block: "直接拦截"
+    review: "人工复审"
+    pass: "放行"

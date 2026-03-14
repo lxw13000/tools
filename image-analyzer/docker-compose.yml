@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  # 图片分析服务
+  image-analyzer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: image-analyzer
+    ports:
+      - "5000:5000"
+    volumes:
+      # 挂载配置文件，方便修改阈值
+      - ./config.yaml:/app/config.yaml:ro
+      # 挂载模型目录，下载模型后无需重新构建
+      - ./models:/app/models:ro
+      # 挂载上传目录（可选）
+      - ./uploads:/tmp/uploads
+    environment:
+      - FLASK_ENV=production
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "2"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - image-analyzer-network
+
+networks:
+  image-analyzer-network:
+    driver: bridge
