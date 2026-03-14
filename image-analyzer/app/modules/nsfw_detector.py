@@ -1,7 +1,7 @@
 """
 NSFW 检测服务门面 (Facade)
 统一管理 3 个检测模型: OpenNSFW2, MobileNet V2 140, Falconsai ViT
-提供双分类标签输出: 安全分类(色情/暴力/正常) + 内容分类(人物/动漫/风景)
+提供双分类标签输出: 安全分类(色情/性感/暴力/正常) + 内容分类(人物/动漫/风景)
 """
 
 import os
@@ -106,6 +106,7 @@ class NSFWDetector:
     # ---- 公开 API ----
 
     def get_models_info(self) -> List[Dict]:
+        """返回所有已注册模型的元信息列表（含可用性检查）"""
         result = []
         for model_id, cfg in MODEL_REGISTRY.items():
             result.append({
@@ -131,7 +132,11 @@ class NSFWDetector:
             except ImportError:
                 return False
         elif cfg['type'] == 'falconsai':
-            return self._get_falconsai().is_available()
+            # 惰性初始化可能抛异常（如依赖缺失），捕获后视为不可用
+            try:
+                return self._get_falconsai().is_available()
+            except Exception:
+                return False
         elif cfg['type'] == 'tf_gantman':
             return os.path.exists(os.path.join(self.models_dir, cfg['file']))
         return False
@@ -141,6 +146,19 @@ class NSFWDetector:
 
     def detect(self, image_path: str, model_id: str = 'mobilenet',
                thresholds: Optional[Dict] = None) -> Dict:
+        """
+        统一检测入口，路由到对应模型
+
+        Args:
+            image_path: 图片文件绝对路径
+            model_id:   'mobilenet' | 'opennsfw2' | 'falconsai'
+            thresholds:  覆盖默认阈值的字典；key 含义取决于模型类型
+
+        Returns:
+            dict: {status, model, model_id, elapsed_seconds, image_size,
+                   raw_scores, content_type, safety{色情,性感,暴力,正常},
+                   action, action_text, details}
+        """
         if model_id not in MODEL_REGISTRY:
             return {"status": "error", "message": f"未知模型: {model_id}"}
 
@@ -172,7 +190,7 @@ class NSFWDetector:
 
             img = Image.open(image_path).convert('RGB')
             dim = MODEL_REGISTRY['mobilenet']['input_size']
-            img_resized = img.resize((dim, dim), Image.BILINEAR)
+            img_resized = img.resize((dim, dim), Image.Resampling.BILINEAR)
             arr = np.asarray(img_resized, dtype=np.float32)
             arr = (arr / 127.5) - 1.0
             arr = np.expand_dims(arr, 0)
@@ -188,8 +206,10 @@ class NSFWDetector:
                 '动漫': round(raw['hentai'], 4),
                 '风景': round(raw['drawings'], 4),
             }
+            # 安全分类：色情 = porn + hentai，性感 = sexy（独立分出以便阈值评判）
             safety = {
-                '色情': round(raw['porn'] + raw['hentai'] + raw['sexy'], 4),
+                '色情': round(raw['porn'] + raw['hentai'], 4),
+                '性感': round(raw['sexy'], 4),
                 '暴力': 0.0,
                 '正常': round(raw['neutral'] + raw['drawings'], 4),
             }
@@ -214,6 +234,12 @@ class NSFWDetector:
             return {"status": "error", "message": f"MobileNet 检测失败: {str(e)}"}
 
     def _mobilenet_decision(self, raw: Dict, t: Dict):
+        """
+        MobileNet 5-class 阈值级联决策
+
+        优先级: porn 单项超阈 → porn+hentai 组合超阈 → hentai 单项 → sexy 单项
+        前两级判定为 block(拦截)，后两级判定为 review(复审)，均不触发则 pass(放行)
+        """
         action = 'pass'
         details = []
 

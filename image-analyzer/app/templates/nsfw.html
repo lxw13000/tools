@@ -105,6 +105,7 @@ input[type="file"]{display:none}
 .score-track{flex:1;height:8px;background:#f3f4f6;border-radius:4px;overflow:hidden}
 .score-fill{height:100%;border-radius:4px;transition:width .35s}
 .score-fill.sf-porn{background:#dc2626}
+.score-fill.sf-sexy{background:#f97316}
 .score-fill.sf-violence{background:#f59e0b}
 .score-fill.sf-normal{background:#16a34a}
 .score-fill.ct-person{background:#8b5cf6}
@@ -281,18 +282,14 @@ fetch('/api/nsfw/config').then(r=>r.json()).then(d=>{
 }).catch(()=>{});
 
 document.getElementById('thReset').addEventListener('click',()=>{
-  // reset to defs
   const model=allModels.find(m=>m.id===selectedModel);
   const isMobilenet=model&&model.output==='5class';
   const defs=isMobilenet?TH_MOBILENET:TH_BINARY;
+  // 优先使用服务端默认值，回退到前端硬编码默认值
   defs.forEach(d=>{
-    currentThresholds[d.key]=d.def;
+    const serverVal=defaults[d.key]!==undefined?Math.round(defaults[d.key]*100):null;
+    currentThresholds[d.key]=serverVal!==null?serverVal:d.def;
   });
-  if(Object.keys(defaults).length){
-    Object.keys(defaults).forEach(k=>{
-      currentThresholds[k]=Math.round(defaults[k]*100);
-    });
-  }
   renderThresholds();
 });
 
@@ -390,6 +387,10 @@ detectBtn.addEventListener('click',async()=>{
     const fd=new FormData();
     fd.append('image',file);
     fd.append('models',[...checkedModels].join(','));
+    // 追加当前阈值到 FormData，后端按模型类型分发
+    ['porn','hentai','sexy','porn_hentai','nsfw_block','nsfw_review'].forEach(k=>{
+      if(currentThresholds[k]!==undefined) fd.append('threshold_'+k,(currentThresholds[k]/100).toFixed(2));
+    });
     try{
       const res=await fetch('/api/detect/nsfw/fusion',{method:'POST',body:fd});
       const data=await res.json();
@@ -431,6 +432,7 @@ function buildSafetyBars(safety){
   if(!safety) return '';
   const items=[
     {key:'色情',cls:'sf-porn'},
+    {key:'性感',cls:'sf-sexy'},
     {key:'暴力',cls:'sf-violence'},
     {key:'正常',cls:'sf-normal'},
   ];
@@ -484,6 +486,9 @@ async function redetect(btn){
   try{
     if(fusionMode){
       const fd=new FormData();fd.append('image',f);fd.append('models',[...checkedModels].join(','));
+      ['porn','hentai','sexy','porn_hentai','nsfw_block','nsfw_review'].forEach(k=>{
+        if(currentThresholds[k]!==undefined) fd.append('threshold_'+k,(currentThresholds[k]/100).toFixed(2));
+      });
       const res=await fetch('/api/detect/nsfw/fusion',{method:'POST',body:fd});
       const data=await res.json();addFusionResult(data,src,'redetect',blob.size);
     }else{

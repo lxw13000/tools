@@ -1,6 +1,7 @@
 """
 多模型融合决策引擎
-通过 NSFWDetector 门面调用多个模型，加权融合安全分类分数
+通过 NSFWDetector 门面调用多个模型，加权融合安全分类分数（色情 + 性感）
+支持三种决策策略: weighted_average(默认,保守) / any_block / majority
 """
 
 import time
@@ -34,7 +35,20 @@ class FusionDetector:
             if 'strategy' in fusion:
                 self.strategy = fusion['strategy']
 
-    def detect(self, image_path: str, models: Optional[List[str]] = None) -> Dict:
+    def detect(self, image_path: str, models: Optional[List[str]] = None,
+               thresholds: Optional[Dict[str, Dict]] = None) -> Dict:
+        """
+        融合多模型检测结果
+
+        Args:
+            image_path: 图片文件绝对路径
+            models:     要参与融合的模型 ID 列表，默认全部
+            thresholds: 按模型 ID 分发的阈值字典，如 {'mobilenet': {...}, 'opennsfw2': {...}}
+
+        Returns:
+            dict: {status, fusion{final_score, action, ...}, safety{色情,性感,暴力,正常},
+                   content_type, model_results, elapsed_seconds}
+        """
         start = time.time()
 
         if not models:
@@ -44,20 +58,26 @@ class FusionDetector:
         safety_scores = {}
         weight_sum = 0.0
         weighted_sum = 0.0
+        sexy_weighted_sum = 0.0
         fused_content_type = None
 
         for model_id in models:
-            result = self.nsfw_detector.detect(image_path, model_id=model_id)
+            # 从 thresholds 中取出该模型对应的阈值（如果有）
+            model_th = thresholds.get(model_id) if thresholds else None
+            result = self.nsfw_detector.detect(image_path, model_id=model_id,
+                                               thresholds=model_th)
             model_results[model_id] = result
 
             if result.get('status') != 'success':
                 continue
 
             nsfw_score = result.get('safety', {}).get('色情', 0.0)
+            sexy_score = result.get('safety', {}).get('性感', 0.0)
             safety_scores[model_id] = nsfw_score
 
             w = self.weights.get(model_id, 0.3)
             weighted_sum += nsfw_score * w
+            sexy_weighted_sum += sexy_score * w
             weight_sum += w
 
             # 取第一个有内容分类的结果（仅 MobileNet）
@@ -73,11 +93,14 @@ class FusionDetector:
             }
 
         final_score = round(weighted_sum / weight_sum, 4)
+        final_sexy = round(sexy_weighted_sum / weight_sum, 4)
 
+        # 正常 = 1 - 色情 - 性感，下限 0
         fused_safety = {
             '色情': final_score,
+            '性感': final_sexy,
             '暴力': 0.0,
-            '正常': round(1.0 - final_score, 4),
+            '正常': round(max(0, 1.0 - final_score - final_sexy), 4),
         }
 
         # 决策
@@ -112,7 +135,7 @@ class FusionDetector:
             else:
                 action = 'pass'
         else:
-            # weighted_average（默认）+ 保守策略
+            # weighted_average（默认）+ 保守策略：任一模型 block 即 block
             any_block = any(
                 r.get('action') == 'block'
                 for r in model_results.values()

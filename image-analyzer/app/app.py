@@ -42,7 +42,7 @@ else:
 
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
-# 初始化检测器 — 只需 2 个对象
+# 初始化检测器 — 3 个检测器对象: MotionDetector, NSFWDetector(门面), FusionDetector
 motion_config = config.get('motion_detection', {}) if config else {}
 motion_detector = MotionDetector(
     similarity_threshold=motion_config.get('similarity_threshold', 0.95)
@@ -55,6 +55,8 @@ fusion_detector = FusionDetector(nsfw_detector=nsfw_detector, config=config)
 
 
 def allowed_file(filename: str) -> bool:
+    if not filename:
+        return False
     return '.' in filename and \
            filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
 
@@ -80,21 +82,25 @@ def nsfw_page():
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
+    """GET /api/health — 健康检查"""
     return jsonify({"status": "ok", "message": "服务运行正常"})
 
 
 @app.route('/api/nsfw/models', methods=['GET'])
 def get_nsfw_models():
+    """GET /api/nsfw/models — 返回所有注册模型及可用性"""
     return jsonify(nsfw_detector.get_models_info())
 
 
 @app.route('/api/nsfw/config', methods=['GET'])
 def get_nsfw_config():
+    """GET /api/nsfw/config — 返回 MobileNet 默认阈值"""
     return jsonify(nsfw_detector.get_default_thresholds())
 
 
 @app.route('/api/detect/motion', methods=['POST'])
 def detect_motion():
+    """POST /api/detect/motion — 图片序列动态检测，参数: images(多文件)"""
     if 'images' not in request.files:
         return jsonify({"status": "error", "message": "请上传图片文件"}), 400
 
@@ -127,12 +133,13 @@ def detect_motion():
             try:
                 if os.path.exists(path):
                     os.remove(path)
-            except:
-                pass
+            except OSError as e:
+                app.logger.warning("临时文件清理失败 %s: %s", path, e)
 
 
 @app.route('/api/detect/nsfw', methods=['POST'])
 def detect_nsfw():
+    """POST /api/detect/nsfw — 单模型 NSFW 检测，参数: image, model_id, threshold_*"""
     if 'image' not in request.files:
         return jsonify({"status": "error", "message": "请上传图片文件"}), 400
 
@@ -178,12 +185,13 @@ def detect_nsfw():
         try:
             if os.path.exists(filepath):
                 os.remove(filepath)
-        except:
-            pass
+        except OSError as e:
+            app.logger.warning("临时文件清理失败 %s: %s", filepath, e)
 
 
 @app.route('/api/detect/nsfw/fusion', methods=['POST'])
 def detect_nsfw_fusion():
+    """POST /api/detect/nsfw/fusion — 多模型融合检测，参数: image, models, threshold_*"""
     if 'image' not in request.files:
         return jsonify({"status": "error", "message": "请上传图片文件"}), 400
 
@@ -201,7 +209,31 @@ def detect_nsfw_fusion():
         file.save(filepath)
         models_str = request.form.get('models', '')
         models = [m.strip() for m in models_str.split(',') if m.strip()] if models_str else None
-        result = fusion_detector.detect(filepath, models=models)
+
+        # 解析前端传来的各模型阈值，按模型类型分发
+        per_model_thresholds = {}
+        # MobileNet 阈值
+        mob_th = {}
+        for key in ['porn', 'hentai', 'sexy', 'porn_hentai']:
+            val = request.form.get(f'threshold_{key}', type=float)
+            if val is not None:
+                mob_th[key] = val
+        if mob_th:
+            per_model_thresholds['mobilenet'] = mob_th
+        # 二分类模型阈值
+        bin_th = {}
+        for key in ['nsfw_block', 'nsfw_review']:
+            val = request.form.get(f'threshold_{key}', type=float)
+            if val is not None:
+                bin_th[key] = val
+        if bin_th:
+            per_model_thresholds['opennsfw2'] = bin_th
+            per_model_thresholds['falconsai'] = bin_th
+
+        result = fusion_detector.detect(
+            filepath, models=models,
+            thresholds=per_model_thresholds if per_model_thresholds else None
+        )
         return jsonify(result)
 
     except Exception as e:
@@ -211,13 +243,14 @@ def detect_nsfw_fusion():
         try:
             if os.path.exists(filepath):
                 os.remove(filepath)
-        except:
-            pass
+        except OSError as e:
+            app.logger.warning("临时文件清理失败 %s: %s", filepath, e)
 
 
 @app.errorhandler(413)
 def request_entity_too_large(error):
-    return jsonify({"status": "error", "message": "文件过大，最大支持50MB"}), 413
+    max_mb = app.config['MAX_CONTENT_LENGTH'] // (1024 * 1024)
+    return jsonify({"status": "error", "message": f"文件过大，最大支持{max_mb}MB"}), 413
 
 
 @app.errorhandler(500)
@@ -226,4 +259,9 @@ def internal_server_error(error):
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    srv = config.get('server', {}) if config else {}
+    app.run(
+        host=srv.get('host', '0.0.0.0'),
+        port=srv.get('port', 5000),
+        debug=srv.get('debug', False),
+    )

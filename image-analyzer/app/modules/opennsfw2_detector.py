@@ -37,6 +37,16 @@ class OpenNSFW2Detector:
         self._model = n2.make_open_nsfw_model()
 
     def detect(self, image_path: str, thresholds: Optional[Dict] = None) -> Dict:
+        """
+        二分类 NSFW 检测
+
+        Args:
+            image_path: 图片文件绝对路径
+            thresholds:  {nsfw_block, nsfw_review}
+
+        Returns:
+            dict: 统一安全标签格式，性感固定 0.0（二分类模型无法区分性感与色情）
+        """
         if not os.path.exists(image_path):
             return {"status": "error", "message": "图片文件不存在"}
 
@@ -81,6 +91,7 @@ class OpenNSFW2Detector:
                 'content_type': None,
                 'safety': {
                     '色情': nsfw_prob,
+                    '性感': 0.0,  # 二分类模型无法区分性感与色情，固定 0.0
                     '暴力': 0.0,
                     '正常': normal_prob,
                 },

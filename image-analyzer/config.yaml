@@ -54,9 +54,3 @@ nsfw_detection:
       block: 0.7        # 融合分数 >= 此值 → 拦截
       review: 0.4       # 融合分数 >= 此值 → 复审
     strategy: "weighted_average"  # weighted_average | any_block | majority
-
-  # 处理动作
-  actions:
-    block: "直接拦截"
-    review: "人工复审"
-    pass: "放行"
