@@ -58,9 +58,7 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 # ---- 初始化检测器 ----
 motion_config = config.get('motion_detection', {}) if config else {}
-motion_detector = MotionDetector(
-    similarity_threshold=motion_config.get('similarity_threshold', 0.95)
-)
+motion_detector = MotionDetector(config=motion_config)
 nsfw_detector = NSFWDetector(
     models_dir=os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models'),
     config=config,
@@ -116,6 +114,15 @@ def get_nsfw_config():
     return jsonify(nsfw_detector.get_default_thresholds())
 
 
+@app.route('/api/motion/config', methods=['GET'])
+def get_motion_config():
+    """GET /api/motion/config — 返回动态检测默认权重和阈值（供前端渲染滑块初始值）"""
+    return jsonify({
+        "weights": motion_detector.weights,
+        "thresholds": motion_detector.thresholds,
+    })
+
+
 @app.route('/api/detect/motion', methods=['POST'])
 def detect_motion():
     """
@@ -158,8 +165,26 @@ def detect_motion():
         if not saved_paths:
             return jsonify({"status": "error", "message": "没有有效的图片文件"}), 400
 
+        # 解析前端传来的可选权重参数
+        weights = {}
+        for key in ['phash', 'ssim', 'flow']:
+            val = request.form.get(f'weight_{key}', type=float)
+            if val is not None:
+                weights[key] = val
+
+        # 解析前端传来的可选阈值参数
+        thresholds = {}
+        for key in ['static', 'dynamic']:
+            val = request.form.get(f'threshold_{key}', type=float)
+            if val is not None:
+                thresholds[key] = val
+
         # 调用动态检测器
-        return jsonify(motion_detector.detect(saved_paths))
+        return jsonify(motion_detector.detect(
+            saved_paths,
+            weights=weights if weights else None,
+            thresholds=thresholds if thresholds else None,
+        ))
 
     except Exception as e:
         logger.exception("动态检测接口异常")

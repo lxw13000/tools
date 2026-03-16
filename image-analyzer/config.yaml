@@ -20,8 +20,16 @@ upload:
 
 # 动态检测配置
 motion_detection:
-  # 相似度阈值：高于此值认为是静态图片
-  similarity_threshold: 0.95
+  # 三种评分方法的权重（加权融合，自动归一化）
+  weights:
+    phash: 0.40     # 感知哈希权重
+    ssim: 0.35      # 结构相似度权重
+    flow: 0.25      # 光流检测权重
+  # 判定阈值（融合评分与阈值比较，中间区域为人工复核）
+  thresholds:
+    static: 0.95    # 融合评分 >= 此值 → 静态
+    dynamic: 0.75   # 融合评分 < 此值 → 动态
+                     # 介于两者之间 → 人工复核
 
 # NSFW 检测配置
 nsfw_detection:

@@ -7,14 +7,36 @@
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;background:#f0f2f5;min-height:100vh}
-/* topbar */
 .topbar{background:#fff;border-bottom:1px solid #e5e7eb;padding:0 24px;height:52px;display:flex;align-items:center;position:sticky;top:0;z-index:10}
 .topbar a{color:#4f46e5;text-decoration:none;font-size:.9em;display:flex;align-items:center;gap:5px}
 .topbar a:hover{text-decoration:underline}
 .topbar h1{margin-left:16px;font-size:1.05em;color:#111827;font-weight:600}
-/* page */
-.page{max-width:860px;margin:24px auto;padding:0 16px}
-.card{background:#fff;border-radius:12px;padding:28px;box-shadow:0 1px 4px rgba(0,0,0,.05)}
+/* layout */
+.main{display:flex;gap:18px;max-width:1280px;margin:20px auto;padding:0 16px;align-items:flex-start}
+.sidebar{width:300px;flex-shrink:0;display:flex;flex-direction:column;gap:14px;position:sticky;top:72px}
+.content{flex:1;min-width:0;display:flex;flex-direction:column;gap:14px}
+.panel{background:#fff;border-radius:12px;padding:20px 22px;box-shadow:0 1px 4px rgba(0,0,0,.05)}
+.panel-title{font-size:.82em;color:#9ca3af;font-weight:600;text-transform:uppercase;letter-spacing:.6px;margin-bottom:14px}
+/* threshold / weight slider groups */
+.th-group{margin-bottom:14px}
+.th-group:last-child{margin-bottom:0}
+.th-group label{display:flex;justify-content:space-between;align-items:center;font-size:.84em;color:#374151;margin-bottom:4px;font-weight:500}
+.th-group label span{font-size:.82em;color:#9ca3af;font-weight:400}
+.th-row{display:flex;align-items:center;gap:8px}
+.th-row input[type=range]{flex:1;accent-color:#4f46e5;height:6px}
+.th-row .th-val{width:48px;text-align:center;font-size:.85em;color:#374151;font-weight:500;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:3px 0}
+.th-reset{width:100%;margin-top:10px;padding:7px;border-radius:7px;border:1px solid #d1d5db;background:#fff;color:#6b7280;font-size:.82em;cursor:pointer}
+.th-reset:hover{background:#f9fafb}
+.th-section-title{font-size:.78em;color:#6b7280;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid #f3f4f6}
+/* weight total indicator */
+.weight-total{margin-top:10px;padding:8px 12px;border-radius:8px;font-size:.82em;font-weight:500;text-align:center}
+.weight-total.ok{background:#d1fae5;color:#065f46}
+.weight-total.warn{background:#fef3c7;color:#92400e}
+/* threshold zone indicator */
+.zone-bar{display:flex;height:20px;border-radius:6px;overflow:hidden;margin-top:10px;font-size:.7em;font-weight:500;color:#fff;text-align:center;line-height:20px}
+.zone-bar .z-dynamic{background:#d97706}
+.zone-bar .z-review{background:#eab308}
+.zone-bar .z-static{background:#16a34a}
 /* upload */
 .upload-area{border:2px dashed #d1d5db;border-radius:10px;padding:36px 16px;text-align:center;cursor:pointer;transition:border-color .2s,background .2s;background:#fafafa}
 .upload-area:hover,.upload-area.dragover{border-color:#4f46e5;background:#eef2ff}
@@ -43,25 +65,51 @@ input[type="file"]{display:none}
 @keyframes spin{to{transform:rotate(360deg)}}
 .loading p{color:#6b7280;font-size:.85em}
 /* result history */
-.history{margin-top:28px}
-.history-title{font-size:.9em;color:#6b7280;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between}
-.history-title button{font-size:.8em;color:#dc2626;background:none;border:none;cursor:pointer}
-.result-card{background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:18px 20px;margin-bottom:12px;line-height:1.65;font-size:.9em;animation:fadeIn .25s}
+.hist-header{display:flex;align-items:center;justify-content:space-between}
+.hist-header button{font-size:.76em;color:#dc2626;background:none;border:none;cursor:pointer}
+.result-card{background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:18px 20px;margin-top:10px;line-height:1.65;font-size:.9em;animation:fadeIn .25s}
 @keyframes fadeIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
 .result-card .rc-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
 .rc-badge{display:inline-block;padding:2px 10px;border-radius:12px;font-size:.78em;font-weight:600;color:#fff}
 .rc-badge.static{background:#16a34a}
 .rc-badge.dynamic{background:#d97706}
+.rc-badge.review{background:#eab308;color:#422006}
 .rc-badge.error{background:#dc2626}
 .rc-time{font-size:.78em;color:#9ca3af}
-.rc-thumbs{display:flex;gap:4px;margin-bottom:8px;flex-wrap:wrap}
+.rc-thumbs{display:flex;gap:4px;margin-bottom:10px;flex-wrap:wrap}
 .rc-thumbs img{width:48px;height:48px;border-radius:6px;object-fit:cover;border:1px solid #e5e7eb}
-.rc-detail{color:#374151}
+/* score bars */
+.score-section{margin-bottom:10px}
+.score-section:last-child{margin-bottom:0}
+.score-section-title{font-size:.76em;color:#9ca3af;font-weight:600;margin-bottom:4px;text-transform:uppercase;letter-spacing:.4px}
+.score-row{display:flex;align-items:center;gap:6px;margin:5px 0}
+.score-lbl{width:46px;font-size:.78em;color:#6b7280;text-align:right;flex-shrink:0}
+.score-track{flex:1;height:8px;background:#f3f4f6;border-radius:4px;overflow:hidden}
+.score-fill{height:100%;border-radius:4px;transition:width .35s}
+.score-fill.sf-phash{background:#6366f1}
+.score-fill.sf-ssim{background:#8b5cf6}
+.score-fill.sf-flow{background:#a78bfa}
+.score-fill.sf-fusion{background:#4f46e5}
+.score-val{width:52px;font-size:.76em;color:#6b7280;flex-shrink:0}
+.rc-detail{color:#374151;font-size:.82em;margin-top:6px}
 .rc-detail span{color:#6b7280}
 .elapsed{color:#9ca3af;font-size:.8em;margin-top:4px}
+/* pair details toggle */
+.pair-toggle{font-size:.76em;color:#6b7280;cursor:pointer;background:none;border:1px solid #e5e7eb;border-radius:6px;padding:3px 10px;margin-top:6px}
+.pair-toggle:hover{background:#f9fafb}
+.pair-details{display:none;margin-top:6px;padding:8px 10px;background:#f9fafb;border-radius:6px;font-size:.78em;color:#6b7280;line-height:1.8}
+.pair-details.show{display:block}
+/* responsive */
+@media(max-width:820px){
+  .main{flex-direction:column}
+  .sidebar{width:100%;position:static;flex-direction:row;flex-wrap:wrap;gap:14px}
+  .sidebar>.panel{flex:1;min-width:240px}
+}
 @media(max-width:520px){
-  .page{padding:0 10px;margin:14px auto}
-  .card{padding:20px 16px}
+  .main{padding:0 10px;margin:12px auto}
+  .panel{padding:16px}
+  .sidebar{flex-direction:column}
+  .sidebar>.panel{min-width:0}
   .preview-grid{grid-template-columns:repeat(auto-fill,80px)}
   .preview-item{width:80px;height:80px}
 }
@@ -73,39 +121,202 @@ input[type="file"]{display:none}
   <h1>动态检测</h1>
 </div>
 
-<div class="page">
-  <div class="card">
-    <div class="upload-area" id="uploadArea">
-      <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-      <p><strong>点击或拖拽上传图片</strong></p>
-      <p>支持单张追加或一次性多选，每次检测最多 6 张</p>
-      <input type="file" id="fileInput" multiple accept="image/*">
+<div class="main">
+  <!-- LEFT SIDEBAR -->
+  <div class="sidebar">
+    <!-- Panel 1: Weight Configuration -->
+    <div class="panel">
+      <div class="panel-title">评分权重配置</div>
+      <div id="weightContent"></div>
+      <div class="weight-total ok" id="weightTotal">合计: 100%</div>
+      <button class="th-reset" id="weightReset">恢复默认值</button>
     </div>
-    <div class="preview-grid" id="previewGrid"></div>
-    <div class="file-count" id="fileCount"></div>
-    <div class="btn-row">
-      <button class="btn btn-primary" id="detectBtn" disabled>开始检测</button>
-      <button class="btn btn-ghost" id="clearBtn">清空</button>
+    <!-- Panel 2: Threshold Configuration -->
+    <div class="panel">
+      <div class="panel-title">判定阈值配置</div>
+      <div id="thresholdContent"></div>
+      <div class="zone-bar" id="zoneBar">
+        <div class="z-dynamic" style="flex:75">动态 &lt;75%</div>
+        <div class="z-review" style="flex:20">复核</div>
+        <div class="z-static" style="flex:5">&ge;95%</div>
+      </div>
+      <button class="th-reset" id="thReset">恢复默认值</button>
     </div>
-    <div class="loading" id="loading"><div class="spinner"></div><p>分析中...</p></div>
   </div>
 
-  <!-- result history -->
-  <div class="history" id="history" style="display:none">
-    <div class="history-title"><span>检测记录</span><button id="clearHistory">清空记录</button></div>
-    <div id="historyList"></div>
+  <!-- RIGHT CONTENT -->
+  <div class="content">
+    <div class="panel">
+      <div class="upload-area" id="uploadArea">
+        <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        <p><strong>点击或拖拽上传图片</strong></p>
+        <p>支持单张追加或一次性多选，每次检测最多 6 张</p>
+        <input type="file" id="fileInput" multiple accept="image/*">
+      </div>
+      <div class="preview-grid" id="previewGrid"></div>
+      <div class="file-count" id="fileCount"></div>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="detectBtn" disabled>开始检测</button>
+        <button class="btn btn-ghost" id="clearBtn">清空</button>
+      </div>
+      <div class="loading" id="loading"><div class="spinner"></div><p>三维融合分析中...</p></div>
+    </div>
+
+    <!-- result history -->
+    <div class="panel" id="histPanel" style="display:none">
+      <div class="hist-header">
+        <div class="panel-title" style="margin-bottom:0">检测记录</div>
+        <button id="clearHistory">清空记录</button>
+      </div>
+      <div id="historyList"></div>
+    </div>
   </div>
 </div>
 
 <script>
+/* ---- elements ---- */
 const uploadArea=document.getElementById('uploadArea'),fileInput=document.getElementById('fileInput'),
       previewGrid=document.getElementById('previewGrid'),fileCount=document.getElementById('fileCount'),
       detectBtn=document.getElementById('detectBtn'),clearBtn=document.getElementById('clearBtn'),
-      loading=document.getElementById('loading'),history=document.getElementById('history'),
-      historyList=document.getElementById('historyList');
+      loading=document.getElementById('loading'),histPanel=document.getElementById('histPanel'),
+      historyList=document.getElementById('historyList'),
+      weightContent=document.getElementById('weightContent'),
+      thresholdContent=document.getElementById('thresholdContent'),
+      weightTotalEl=document.getElementById('weightTotal'),
+      zoneBar=document.getElementById('zoneBar');
+
 const MAX=6;
 let files=[],thumbs=[];
 
+/* ---- weight & threshold definitions ---- */
+const WEIGHT_DEFS=[
+  {key:'phash', label:'pHash 感知哈希', def:40},
+  {key:'ssim',  label:'SSIM 结构相似度', def:35},
+  {key:'flow',  label:'Flow 光流检测',   def:25},
+];
+const THRESHOLD_DEFS=[
+  {key:'static',  label:'静态阈值（>=此值为静态）', def:95},
+  {key:'dynamic', label:'动态阈值（<此值为动态）',  def:75},
+];
+
+let currentWeights={phash:40,ssim:35,flow:25};
+let currentThresholds={static:95,dynamic:75};
+let defaultWeights={...currentWeights};
+let defaultThresholds={...currentThresholds};
+
+/* ---- render weight sliders ---- */
+function renderWeights(){
+  let html='';
+  WEIGHT_DEFS.forEach(d=>{
+    const val=currentWeights[d.key];
+    html+=`<div class="th-group">
+      <label>${d.label} <span id="wVal_${d.key}">${val}%</span></label>
+      <div class="th-row">
+        <input type="range" id="w_${d.key}" min="0" max="100" value="${val}" data-key="${d.key}">
+        <div class="th-val" id="wNum_${d.key}">${val}%</div>
+      </div>
+    </div>`;
+  });
+  weightContent.innerHTML=html;
+
+  weightContent.querySelectorAll('input[type=range]').forEach(sl=>{
+    sl.addEventListener('input',()=>{
+      const k=sl.dataset.key;
+      currentWeights[k]=parseInt(sl.value);
+      document.getElementById('wNum_'+k).textContent=sl.value+'%';
+      const valEl=document.getElementById('wVal_'+k);
+      if(valEl) valEl.textContent=sl.value+'%';
+      updateWeightTotal();
+    });
+  });
+  updateWeightTotal();
+}
+
+function updateWeightTotal(){
+  const total=currentWeights.phash+currentWeights.ssim+currentWeights.flow;
+  weightTotalEl.textContent='合计: '+total+'%';
+  if(total===100){
+    weightTotalEl.className='weight-total ok';
+  }else{
+    weightTotalEl.className='weight-total warn';
+    weightTotalEl.textContent+=' (后端自动归一化)';
+  }
+}
+
+/* ---- render threshold sliders ---- */
+function renderThresholds(){
+  let html='';
+  THRESHOLD_DEFS.forEach(d=>{
+    const val=currentThresholds[d.key];
+    html+=`<div class="th-group">
+      <label>${d.label} <span id="tVal_${d.key}">${val}%</span></label>
+      <div class="th-row">
+        <input type="range" id="t_${d.key}" min="0" max="100" value="${val}" data-key="${d.key}">
+        <div class="th-val" id="tNum_${d.key}">${val}%</div>
+      </div>
+    </div>`;
+  });
+  thresholdContent.innerHTML=html;
+
+  thresholdContent.querySelectorAll('input[type=range]').forEach(sl=>{
+    sl.addEventListener('input',()=>{
+      const k=sl.dataset.key;
+      currentThresholds[k]=parseInt(sl.value);
+      document.getElementById('tNum_'+k).textContent=sl.value+'%';
+      const valEl=document.getElementById('tVal_'+k);
+      if(valEl) valEl.textContent=sl.value+'%';
+      updateZoneBar();
+    });
+  });
+  updateZoneBar();
+}
+
+function updateZoneBar(){
+  const s=currentThresholds.static, d=currentThresholds.dynamic;
+  const dynW=Math.max(d,1);
+  const reviewW=Math.max(s-d,0);
+  const statW=Math.max(100-s,1);
+  zoneBar.innerHTML=
+    `<div class="z-dynamic" style="flex:${dynW}">动态 &lt;${d}%</div>`+
+    (reviewW>0?`<div class="z-review" style="flex:${reviewW}">复核</div>`:'')+
+    `<div class="z-static" style="flex:${statW}">&ge;${s}%</div>`;
+}
+
+/* ---- load config from server ---- */
+fetch('/api/motion/config').then(r=>r.json()).then(cfg=>{
+  if(cfg.weights){
+    defaultWeights={
+      phash:Math.round(cfg.weights.phash*100),
+      ssim:Math.round(cfg.weights.ssim*100),
+      flow:Math.round(cfg.weights.flow*100),
+    };
+    currentWeights={...defaultWeights};
+  }
+  if(cfg.thresholds){
+    defaultThresholds={
+      static:Math.round(cfg.thresholds.static*100),
+      dynamic:Math.round(cfg.thresholds.dynamic*100),
+    };
+    currentThresholds={...defaultThresholds};
+  }
+  renderWeights();
+  renderThresholds();
+}).catch(()=>{
+  renderWeights();
+  renderThresholds();
+});
+
+/* ---- reset buttons ---- */
+document.getElementById('weightReset').addEventListener('click',()=>{
+  currentWeights={...defaultWeights};
+  renderWeights();
+});
+document.getElementById('thReset').addEventListener('click',()=>{
+  currentThresholds={...defaultThresholds};
+  renderThresholds();
+});
+
+/* ---- upload logic ---- */
 uploadArea.addEventListener('click',()=>fileInput.click());
 uploadArea.addEventListener('dragover',e=>{e.preventDefault();uploadArea.classList.add('dragover')});
 uploadArea.addEventListener('dragleave',()=>uploadArea.classList.remove('dragover'));
@@ -141,14 +352,25 @@ function renderPreview(){
 }
 
 function removeFile(i){files.splice(i,1);thumbs.splice(i,1);renderPreview()}
-
 clearBtn.addEventListener('click',()=>{files=[];thumbs=[];renderPreview()});
 
+/* ---- detect ---- */
 detectBtn.addEventListener('click',async()=>{
   if(!files.length) return;
   loading.classList.add('show');detectBtn.disabled=true;
+
   const fd=new FormData();
   files.forEach(f=>fd.append('images',f));
+
+  // 追加权重参数
+  fd.append('weight_phash',(currentWeights.phash/100).toFixed(2));
+  fd.append('weight_ssim',(currentWeights.ssim/100).toFixed(2));
+  fd.append('weight_flow',(currentWeights.flow/100).toFixed(2));
+
+  // 追加阈值参数
+  fd.append('threshold_static',(currentThresholds.static/100).toFixed(2));
+  fd.append('threshold_dynamic',(currentThresholds.dynamic/100).toFixed(2));
+
   const curThumbs=[...thumbs];
   try{
     const res=await fetch('/api/detect/motion',{method:'POST',body:fd});
@@ -162,29 +384,95 @@ detectBtn.addEventListener('click',async()=>{
   }
 });
 
+/* ---- result rendering ---- */
+const resultTextMap={static:'静态',dynamic:'动态',review:'人工复核'};
+let pairCounter=0;
+
+function buildScoreBar(label, value, cls){
+  if(value===undefined||value===null) return '';
+  const pct=(value*100).toFixed(2);
+  return `<div class="score-row">
+    <span class="score-lbl">${label}</span>
+    <div class="score-track"><div class="score-fill ${cls}" style="width:${pct}%"></div></div>
+    <span class="score-val">${pct}%</span>
+  </div>`;
+}
+
+function buildPairDetails(pairData, id){
+  if(!pairData) return '';
+  const methods=['phash','ssim','flow'];
+  const labels={phash:'pHash',ssim:'SSIM',flow:'Flow'};
+  let hasData=false;
+  let content='';
+  methods.forEach(m=>{
+    const pairs=pairData[m];
+    if(pairs&&pairs.length){
+      hasData=true;
+      content+=`<div><strong>${labels[m]}:</strong> `+pairs.map((s,i)=>`图${i+1}→${i+2}: ${(s*100).toFixed(1)}%`).join(' &emsp;')+'</div>';
+    }
+  });
+  if(!hasData) return '';
+  return `<button class="pair-toggle" onclick="document.getElementById('${id}').classList.toggle('show')">逐对详情</button><div class="pair-details" id="${id}">${content}</div>`;
+}
+
 function addHistory(data,previews){
-  history.style.display='';
+  histPanel.style.display='';
   const card=document.createElement('div');card.className='result-card';
   const now=new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+
   if(data.status==='error'){
     card.innerHTML=`<div class="rc-head"><span class="rc-badge error">失败</span><span class="rc-time">${now}</span></div><div class="rc-detail">${data.message}</div>`;
-  }else{
-    const isStatic=data.result==='static';
-    let thumbsHtml='<div class="rc-thumbs">'+previews.map(s=>`<img src="${s}">`).join('')+'</div>';
-    let simsHtml='';
-    if(data.similarities&&data.similarities.length){
-      simsHtml=data.similarities.map((s,i)=>`<span>图${i+1}→${i+2}:</span> ${(s*100).toFixed(1)}%`).join('&emsp;');
-    }
-    card.innerHTML=`
-      <div class="rc-head"><span class="rc-badge ${isStatic?'static':'dynamic'}">${isStatic?'静态':'动态'}</span><span class="rc-time">${now}</span></div>
-      ${thumbsHtml}
-      <div class="rc-detail">置信度 <strong>${(data.confidence*100).toFixed(2)}%</strong>&emsp;${simsHtml}</div>
-      ${data.elapsed_seconds!==undefined?`<div class="elapsed">耗时 ${data.elapsed_seconds}s</div>`:''}`;
+    historyList.prepend(card);
+    return;
   }
+
+  const result=data.result||'static';
+  const badgeCls=result;
+  const badgeText=resultTextMap[result]||result;
+
+  let thumbsHtml='<div class="rc-thumbs">'+previews.map(s=>`<img src="${s}">`).join('')+'</div>';
+
+  // 各方法评分
+  const scores=data.scores||{};
+  let methodBars='';
+  if(scores.phash!==undefined) methodBars+=buildScoreBar('pHash',scores.phash,'sf-phash');
+  if(scores.ssim!==undefined) methodBars+=buildScoreBar('SSIM',scores.ssim,'sf-ssim');
+  if(scores.flow!==undefined) methodBars+=buildScoreBar('Flow',scores.flow,'sf-flow');
+
+  // 融合评分
+  let fusionBar=buildScoreBar('融合',data.fusion_score,'sf-fusion');
+
+  // 权重和阈值信息
+  const wu=data.weights_used||{};
+  const tu=data.thresholds_used||{};
+  let detailText='';
+  if(wu.phash!==undefined) detailText+=`<span>权重:</span> pHash ${(wu.phash*100).toFixed(0)}% / SSIM ${(wu.ssim*100).toFixed(0)}% / Flow ${(wu.flow*100).toFixed(0)}%`;
+  if(tu.static!==undefined) detailText+=` &emsp;<span>阈值:</span> 静态>=${(tu.static*100).toFixed(0)}% / 动态<${(tu.dynamic*100).toFixed(0)}%`;
+
+  const pairId='pair_'+(pairCounter++);
+  const pairHtml=buildPairDetails(data.pair_details,pairId);
+
+  card.innerHTML=`
+    <div class="rc-head"><span class="rc-badge ${badgeCls}">${badgeText}</span><span class="rc-time">${now}</span></div>
+    ${thumbsHtml}
+    <div class="rc-scores">
+      <div class="score-section">
+        <div class="score-section-title">各方法评分</div>
+        ${methodBars}
+      </div>
+      <div class="score-section">
+        <div class="score-section-title">融合评分</div>
+        ${fusionBar}
+      </div>
+    </div>
+    ${detailText?'<div class="rc-detail">'+detailText+'</div>':''}
+    ${pairHtml}
+    ${data.elapsed_seconds!==undefined?`<div class="elapsed">耗时 ${data.elapsed_seconds}s</div>`:''}`;
+
   historyList.prepend(card);
 }
 
-document.getElementById('clearHistory').addEventListener('click',()=>{historyList.innerHTML='';history.style.display='none'});
+document.getElementById('clearHistory').addEventListener('click',()=>{historyList.innerHTML='';histPanel.style.display='none'});
 </script>
 </body>
 </html>
