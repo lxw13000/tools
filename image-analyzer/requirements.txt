@@ -15,3 +15,6 @@ opennsfw2>=0.10.0
 # Falconsai ViT
 transformers==4.46.0
 huggingface-hub==0.26.0
+# 定时检测服务
+requests>=2.31.0
+APScheduler>=3.10.0

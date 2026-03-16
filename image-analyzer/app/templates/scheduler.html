@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>定时检测服务 - 图片分析系统</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;background:#f0f2f5;min-height:100vh}
+.topbar{background:#fff;border-bottom:1px solid #e5e7eb;padding:0 24px;height:52px;display:flex;align-items:center;position:sticky;top:0;z-index:10}
+.topbar a{color:#16a34a;text-decoration:none;font-size:.9em;display:flex;align-items:center;gap:5px}
+.topbar a:hover{text-decoration:underline}
+.topbar h1{margin-left:16px;font-size:1.05em;color:#111827;font-weight:600}
+/* layout */
+.main{display:flex;gap:18px;max-width:1280px;margin:20px auto;padding:0 16px;align-items:flex-start}
+.sidebar{width:300px;flex-shrink:0;display:flex;flex-direction:column;gap:14px;position:sticky;top:72px}
+.content{flex:1;min-width:0;display:flex;flex-direction:column;gap:14px}
+.panel{background:#fff;border-radius:12px;padding:20px 22px;box-shadow:0 1px 4px rgba(0,0,0,.05)}
+.panel-title{font-size:.82em;color:#9ca3af;font-weight:600;text-transform:uppercase;letter-spacing:.6px;margin-bottom:14px}
+/* status items */
+.status-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #f3f4f6;font-size:.88em}
+.status-row:last-child{border-bottom:none}
+.status-label{color:#6b7280}
+.status-value{color:#111827;font-weight:500;text-align:right;max-width:170px;word-break:break-all}
+/* badges */
+.badge{display:inline-block;padding:2px 10px;border-radius:12px;font-size:.78em;font-weight:600}
+.badge-on{background:#d1fae5;color:#065f46}
+.badge-off{background:#f3f4f6;color:#6b7280}
+.badge-running{background:#dbeafe;color:#1e40af;animation:pulse 1.5s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.6}}
+/* current step */
+.current-step{margin-top:8px;padding:8px 12px;background:#f0fdf4;border-radius:6px;font-size:.8em;color:#166534;border:1px solid #bbf7d0;display:none}
+.current-step.show{display:block}
+/* risk badges */
+.risk-badge{display:inline-block;padding:2px 10px;border-radius:12px;font-size:.76em;font-weight:600;color:#fff}
+.risk-normal{background:#16a34a}
+.risk-suspect{background:#eab308;color:#422006}
+.risk-mid{background:#ea580c}
+.risk-high{background:#dc2626}
+.risk-fail{background:#6b7280}
+/* callback badge */
+.cb-ok{color:#16a34a;font-weight:600}
+.cb-fail{color:#dc2626;font-weight:600}
+/* buttons */
+.btn{padding:9px 24px;border-radius:8px;font-size:.9em;cursor:pointer;border:none;font-weight:500;transition:opacity .15s}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn-primary{background:#16a34a;color:#fff;width:100%}
+.btn-primary:hover:not(:disabled){background:#15803d}
+/* auto refresh toggle */
+.toggle-row{display:flex;align-items:center;justify-content:space-between;margin-top:14px;font-size:.88em;color:#374151}
+.toggle-switch{position:relative;width:42px;height:24px;cursor:pointer}
+.toggle-switch input{display:none}
+.toggle-slider{position:absolute;inset:0;background:#d1d5db;border-radius:12px;transition:.2s}
+.toggle-slider::before{content:'';position:absolute;width:18px;height:18px;border-radius:50%;background:#fff;left:3px;bottom:3px;transition:.2s}
+.toggle-switch input:checked+.toggle-slider{background:#16a34a}
+.toggle-switch input:checked+.toggle-slider::before{transform:translateX(18px)}
+/* loading */
+.spinner-sm{display:inline-block;border:2px solid #e5e7eb;border-top:2px solid #16a34a;border-radius:50%;width:16px;height:16px;animation:spin .7s linear infinite;vertical-align:middle;margin-right:6px}
+@keyframes spin{to{transform:rotate(360deg)}}
+/* batch card */
+.batch-card{background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:18px 20px;margin-top:10px;animation:fadeIn .25s}
+@keyframes fadeIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
+.batch-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.batch-time{font-size:.82em;color:#9ca3af}
+.batch-count{font-size:.82em;color:#6b7280;background:#f3f4f6;padding:2px 10px;border-radius:12px}
+.batch-error{color:#dc2626;font-size:.85em;margin-bottom:8px;padding:8px 12px;background:#fef2f2;border-radius:6px}
+/* steps log */
+.steps-toggle{font-size:.76em;color:#6b7280;cursor:pointer;background:none;border:1px solid #e5e7eb;border-radius:6px;padding:3px 10px;margin-top:8px}
+.steps-toggle:hover{background:#f9fafb}
+.steps-log{display:none;margin-top:8px;padding:10px 12px;background:#f9fafb;border-radius:6px;font-family:monospace;font-size:.75em;color:#374151;line-height:1.7;max-height:300px;overflow-y:auto;white-space:pre-wrap;word-break:break-all}
+.steps-log.show{display:block}
+/* item row */
+.item-row{padding:12px 0;border-top:1px solid #f3f4f6}
+.item-row:first-child{border-top:none}
+.item-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.item-id{font-size:.88em;font-weight:600;color:#111827}
+.item-thumbs{display:flex;gap:4px;margin-bottom:8px;flex-wrap:wrap}
+.item-thumbs img{width:48px;height:48px;border-radius:6px;object-fit:cover;border:1px solid #e5e7eb}
+/* score bars */
+.score-row{display:flex;align-items:center;gap:6px;margin:4px 0}
+.score-lbl{width:52px;font-size:.76em;color:#6b7280;text-align:right;flex-shrink:0}
+.score-track{flex:1;height:8px;background:#f3f4f6;border-radius:4px;overflow:hidden}
+.score-fill{height:100%;border-radius:4px;transition:width .35s}
+.sf-zombie{background:#16a34a}
+.sf-ssim{background:#22c55e}
+.sf-flow{background:#4ade80}
+.sf-phash{background:#86efac}
+.score-val{width:52px;font-size:.76em;color:#6b7280;flex-shrink:0}
+.item-error{color:#dc2626;font-size:.82em;margin-top:4px}
+.item-cb{font-size:.82em;margin-top:4px}
+/* empty state */
+.empty-state{text-align:center;padding:48px 20px;color:#9ca3af;font-size:.9em}
+.empty-state svg{margin-bottom:12px;opacity:.4}
+/* responsive */
+@media(max-width:820px){
+  .main{flex-direction:column}
+  .sidebar{width:100%;position:static;flex-direction:row;flex-wrap:wrap;gap:14px}
+  .sidebar>.panel{flex:1;min-width:240px}
+}
+@media(max-width:520px){
+  .main{padding:0 10px;margin:12px auto}
+  .panel{padding:16px}
+  .sidebar{flex-direction:column}
+  .sidebar>.panel{min-width:0}
+}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <a href="/"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>首页</a>
+  <h1>定时检测服务</h1>
+</div>
+
+<div class="main">
+  <!-- LEFT SIDEBAR -->
+  <div class="sidebar">
+    <!-- Panel 1: 服务状态 -->
+    <div class="panel">
+      <div class="panel-title">服务状态</div>
+      <div id="statusContent">
+        <div class="status-row">
+          <span class="status-label">启用状态</span>
+          <span class="status-value" id="sEnabled">--</span>
+        </div>
+        <div class="status-row">
+          <span class="status-label">执行间隔</span>
+          <span class="status-value" id="sInterval">--</span>
+        </div>
+        <div class="status-row">
+          <span class="status-label">上次执行</span>
+          <span class="status-value" id="sLastRun">--</span>
+        </div>
+        <div class="status-row">
+          <span class="status-label">下次执行</span>
+          <span class="status-value" id="sNextRun">--</span>
+        </div>
+        <div class="status-row">
+          <span class="status-label">运行状态</span>
+          <span class="status-value" id="sRunning">--</span>
+        </div>
+      </div>
+      <div class="current-step" id="currentStep"></div>
+    </div>
+    <!-- Panel 2: 手动操作 -->
+    <div class="panel">
+      <div class="panel-title">手动操作</div>
+      <button class="btn btn-primary" id="triggerBtn">立即执行</button>
+      <div class="toggle-row">
+        <span>自动刷新（3s）</span>
+        <label class="toggle-switch">
+          <input type="checkbox" id="autoRefresh">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT CONTENT -->
+  <div class="content">
+    <div class="panel">
+      <div class="panel-title">执行记录</div>
+      <div id="historyContent">
+        <div class="empty-state">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          <p>暂无执行记录</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const sEnabled=document.getElementById('sEnabled'),
+      sInterval=document.getElementById('sInterval'),
+      sLastRun=document.getElementById('sLastRun'),
+      sNextRun=document.getElementById('sNextRun'),
+      sRunning=document.getElementById('sRunning'),
+      currentStepEl=document.getElementById('currentStep'),
+      triggerBtn=document.getElementById('triggerBtn'),
+      autoRefreshCb=document.getElementById('autoRefresh'),
+      historyContent=document.getElementById('historyContent');
+
+let refreshTimer=null;
+let pollTimer=null;  // 执行中快速轮询
+
+/* ---- risk badge helper ---- */
+function riskBadge(code, label){
+  const map={
+    'low':      'risk-normal',
+    'medium':   'risk-suspect',
+    'high':     'risk-mid',
+    'critical': 'risk-high',
+    'error':    'risk-fail',
+  };
+  const cls=map[code]||'risk-fail';
+  const text=label||code||'未知';
+  return `<span class="risk-badge ${cls}">${text}</span>`;
+}
+
+/* ---- score bar helper ---- */
+function scoreBar(label, value, cls){
+  if(value===undefined||value===null) return '';
+  const pct=(value*100).toFixed(2);
+  return `<div class="score-row">
+    <span class="score-lbl">${label}</span>
+    <div class="score-track"><div class="score-fill ${cls}" style="width:${pct}%"></div></div>
+    <span class="score-val">${pct}%</span>
+  </div>`;
+}
+
+/* ---- render status ---- */
+function renderStatus(data){
+  sEnabled.innerHTML=data.enabled
+    ?'<span class="badge badge-on">已启用</span>'
+    :'<span class="badge badge-off">未启用</span>';
+  sInterval.textContent=data.interval_minutes+'分钟';
+  sLastRun.textContent=data.last_run||'尚未执行';
+  sNextRun.textContent=data.next_run||'--';
+
+  if(data.running){
+    sRunning.innerHTML='<span class="badge badge-running"><span class="spinner-sm"></span>执行中</span>';
+    triggerBtn.disabled=true;
+    triggerBtn.innerHTML='<span class="spinner-sm"></span>执行中...';
+    // 显示当前步骤
+    if(data.current_step){
+      currentStepEl.textContent=data.current_step;
+      currentStepEl.classList.add('show');
+    }
+    // 开启快速轮询
+    if(!pollTimer){
+      pollTimer=setInterval(fetchStatus,2000);
+    }
+  }else{
+    sRunning.innerHTML='<span class="badge badge-off">空闲</span>';
+    triggerBtn.disabled=false;
+    triggerBtn.textContent='立即执行';
+    currentStepEl.classList.remove('show');
+    // 停止快速轮询
+    if(pollTimer){
+      clearInterval(pollTimer);
+      pollTimer=null;
+    }
+  }
+}
+
+/* ---- render history ---- */
+let stepsCounter=0;
+function renderHistory(history){
+  if(!history||!history.length){
+    historyContent.innerHTML=`<div class="empty-state">
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      <p>暂无执行记录</p></div>`;
+    return;
+  }
+  let html='';
+  history.forEach(batch=>{
+    const stepsId='steps_'+(stepsCounter++);
+    html+=`<div class="batch-card">
+      <div class="batch-header">
+        <span class="batch-time">${batch.time}</span>
+        <span class="batch-count">拉取 ${batch.fetch_count} 条</span>
+      </div>`;
+    if(batch.error){
+      html+=`<div class="batch-error">${escHtml(batch.error)}</div>`;
+    }
+    if(batch.items&&batch.items.length){
+      batch.items.forEach(item=>{
+        html+=`<div class="item-row">
+          <div class="item-head">
+            <span class="item-id">ID: ${item.id}</span>
+            <div style="display:flex;align-items:center;gap:8px">
+              ${item.elapsed?`<span style="font-size:.76em;color:#9ca3af">${item.elapsed}s</span>`:''}
+              ${riskBadge(item.riskLevel, item.riskLabel)}
+            </div>
+          </div>`;
+        // thumbnails
+        if(item.picUrls&&item.picUrls.length){
+          html+='<div class="item-thumbs">';
+          item.picUrls.forEach(u=>{
+            html+=`<img src="${escHtml(u)}" onerror="this.style.display='none'" loading="lazy">`;
+          });
+          html+='</div>';
+        }
+        // scores
+        const s=item.scores||{};
+        if(s.zombieScore!==undefined){
+          html+=scoreBar('融合',s.zombieScore,'sf-zombie');
+          html+=scoreBar('SSIM',s.ssimScore,'sf-ssim');
+          html+=scoreBar('Flow',s.flowScore,'sf-flow');
+          html+=scoreBar('pHash',s.phashScore,'sf-phash');
+        }
+        // callback
+        if(item.callback_ok){
+          html+='<div class="item-cb"><span class="cb-ok">&#10003; 回调成功</span></div>';
+        }else if(item.callback_error){
+          html+=`<div class="item-cb"><span class="cb-fail">&#10007; 回调失败: ${escHtml(item.callback_error)}</span></div>`;
+        }
+        // error
+        if(item.error){
+          html+=`<div class="item-error">${escHtml(item.error)}</div>`;
+        }
+        html+='</div>';
+      });
+    }else if(!batch.error){
+      html+='<div style="color:#9ca3af;font-size:.85em;text-align:center;padding:12px">本批次无待检测数据</div>';
+    }
+    // steps log toggle
+    if(batch.steps&&batch.steps.length){
+      html+=`<button class="steps-toggle" onclick="document.getElementById('${stepsId}').classList.toggle('show')">执行日志 (${batch.steps.length} 条)</button>`;
+      html+=`<div class="steps-log" id="${stepsId}">${escHtml(batch.steps.join('\n'))}</div>`;
+    }
+    html+='</div>';
+  });
+  historyContent.innerHTML=html;
+}
+
+function escHtml(s){
+  if(!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+/* ---- fetch status ---- */
+async function fetchStatus(){
+  try{
+    const res=await fetch('/api/scheduler/status');
+    const data=await res.json();
+    renderStatus(data);
+    renderHistory(data.history);
+  }catch(e){
+    console.error('获取状态失败',e);
+  }
+}
+
+/* ---- trigger ---- */
+triggerBtn.addEventListener('click',async()=>{
+  triggerBtn.disabled=true;
+  triggerBtn.innerHTML='<span class="spinner-sm"></span>触发中...';
+  try{
+    const res=await fetch('/api/scheduler/trigger',{method:'POST'});
+    const data=await res.json();
+    if(!data.success){
+      alert(data.message);
+      triggerBtn.disabled=false;
+      triggerBtn.textContent='立即执行';
+      return;
+    }
+    // 触发成功，开启快速轮询追踪进度
+    setTimeout(fetchStatus,500);
+    if(!pollTimer){
+      pollTimer=setInterval(fetchStatus,2000);
+    }
+  }catch(e){
+    console.error('触发失败',e);
+    triggerBtn.disabled=false;
+    triggerBtn.textContent='立即执行';
+  }
+});
+
+/* ---- auto refresh ---- */
+autoRefreshCb.addEventListener('change',()=>{
+  if(autoRefreshCb.checked){
+    refreshTimer=setInterval(fetchStatus,3000);
+  }else{
+    clearInterval(refreshTimer);
+    refreshTimer=null;
+  }
+});
+
+/* ---- init ---- */
+fetchStatus();
+</script>
+</body>
+</html>

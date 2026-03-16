@@ -16,7 +16,7 @@ import os
 import uuid
 import logging
 import yaml
-from .modules import MotionDetector, NSFWDetector, FusionDetector
+from .modules import MotionDetector, NSFWDetector, FusionDetector, SchedulerService
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +65,12 @@ nsfw_detector = NSFWDetector(
 )
 fusion_detector = FusionDetector(nsfw_detector=nsfw_detector, config=config)
 
+# ---- 初始化定时检测服务 ----
+scheduler_service = SchedulerService(motion_detector=motion_detector, config=config)
+scheduler_config = config.get('scheduler', {}) if config else {}
+if scheduler_config.get('enabled', False):
+    scheduler_service.start()
+
 
 def allowed_file(filename: str) -> bool:
     """检查上传文件扩展名是否在允许列表中"""
@@ -92,6 +98,12 @@ def motion_page():
 def nsfw_page():
     """内容安全检测页面"""
     return render_template('nsfw.html')
+
+
+@app.route('/scheduler')
+def scheduler_page():
+    """定时检测服务页面"""
+    return render_template('scheduler.html')
 
 
 # ---- API 路由 ----
@@ -338,6 +350,27 @@ def detect_nsfw_fusion():
                 os.remove(filepath)
         except OSError as e:
             logger.warning("临时文件清理失败 %s: %s", filepath, e)
+
+
+# ---- 定时检测服务 API ----
+
+@app.route('/api/scheduler/config', methods=['GET'])
+def get_scheduler_config():
+    """GET /api/scheduler/config — 返回定时服务配置"""
+    return jsonify(scheduler_service.get_config_info())
+
+
+@app.route('/api/scheduler/status', methods=['GET'])
+def get_scheduler_status():
+    """GET /api/scheduler/status — 返回运行状态 + 执行历史"""
+    return jsonify(scheduler_service.get_status())
+
+
+@app.route('/api/scheduler/trigger', methods=['POST'])
+def trigger_scheduler():
+    """POST /api/scheduler/trigger — 手动触发一次批次执行"""
+    ok, msg = scheduler_service.trigger_manual()
+    return jsonify({"success": ok, "message": msg})
 
 
 # ---- 错误处理 ----

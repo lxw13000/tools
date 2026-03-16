@@ -28,8 +28,8 @@ COPY requirements.txt .
 # 安装 CPU-only PyTorch（从 PyTorch 官方 CPU 源，体积更小）
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 
-# 安装其余 Python 依赖
-RUN pip install --no-cache-dir -r requirements.txt
+# 安装其余 Python 依赖（大包如 tensorflow 需要更长超时和重试）
+RUN pip install --no-cache-dir --timeout=300 --retries=3 -r requirements.txt
 
 # 复制应用代码
 COPY app/ /app/app/

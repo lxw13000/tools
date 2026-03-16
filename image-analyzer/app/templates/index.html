@@ -16,6 +16,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
 .nav-icon{width:56px;height:56px;border-radius:14px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
 .nav-icon.motion{background:#eef2ff;color:#4f46e5}
 .nav-icon.nsfw{background:#fef2f2;color:#dc2626}
+.nav-icon.scheduler{background:#f0fdf4;color:#16a34a}
 .nav-icon svg{width:28px;height:28px}
 .nav-body{flex:1;min-width:0}
 .nav-body h2{font-size:1.1em;color:#111827;margin-bottom:6px;font-weight:600}
@@ -23,6 +24,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
 .nav-tag{display:inline-block;font-size:.72em;padding:2px 10px;border-radius:20px;margin-top:12px;font-weight:500;letter-spacing:.3px}
 .nav-tag.motion{background:#eef2ff;color:#4f46e5}
 .nav-tag.nsfw{background:#fef2f2;color:#dc2626}
+.nav-tag.scheduler{background:#f0fdf4;color:#16a34a}
 @media(max-width:480px){
   body{padding:24px 12px}
   .nav-card{padding:20px 18px;gap:14px}
@@ -55,6 +57,16 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
       <h2>内容安全检测</h2>
       <p>使用 OpenNSFW2 深度学习模型识别不良内容，支持拦截、复审、放行三级策略，可自定义阈值参数</p>
       <span class="nav-tag nsfw">AI 鉴黄</span>
+    </div>
+  </a>
+  <a class="nav-card" href="/scheduler">
+    <div class="nav-icon scheduler">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+    </div>
+    <div class="nav-body">
+      <h2>定时检测服务</h2>
+      <p>定时从第三方接口拉取直播截图，自动执行动静态检测并回调结果，支持手动触发和执行可视化</p>
+      <span class="nav-tag scheduler">自动化服务</span>
     </div>
   </a>
 </div>

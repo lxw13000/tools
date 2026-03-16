@@ -5,6 +5,7 @@ from .nsfw_detector import NSFWDetector
 from .opennsfw2_detector import OpenNSFW2Detector
 from .falconsai_detector import FalconsaiDetector
 from .fusion_detector import FusionDetector
+from .scheduler_service import SchedulerService
 
 __all__ = [
     'MotionDetector',
@@ -12,4 +13,5 @@ __all__ = [
     'OpenNSFW2Detector',
     'FalconsaiDetector',
     'FusionDetector',
+    'SchedulerService',
 ]
