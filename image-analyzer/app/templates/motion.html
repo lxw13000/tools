@@ -76,6 +76,9 @@ input[type="file"]{display:none}
 .rc-badge.review{background:#eab308;color:#422006}
 .rc-badge.error{background:#dc2626}
 .rc-time{font-size:.78em;color:#9ca3af}
+.rc-redetect{font-size:.72em;color:#6b7280;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:3px 10px;cursor:pointer;white-space:nowrap;transition:all .15s;flex-shrink:0}
+.rc-redetect:hover{color:#4f46e5;border-color:#a5b4fc;background:#eef2ff}
+.rc-redetect:disabled{opacity:.5;cursor:not-allowed}
 .rc-thumbs{display:flex;gap:4px;margin-bottom:10px;flex-wrap:wrap}
 .rc-thumbs img{width:48px;height:48px;border-radius:6px;object-fit:cover;border:1px solid #e5e7eb}
 /* score bars */
@@ -150,7 +153,7 @@ input[type="file"]{display:none}
       <div class="upload-area" id="uploadArea">
         <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
         <p><strong>点击或拖拽上传图片</strong></p>
-        <p>支持单张追加或一次性多选，每次检测最多 6 张</p>
+        <p>支持单张追加或一次性多选，每次检测需要 2-6 张</p>
         <input type="file" id="fileInput" multiple accept="image/*">
       </div>
       <div class="preview-grid" id="previewGrid"></div>
@@ -347,8 +350,8 @@ function renderPreview(){
     previewGrid.appendChild(d);
   });
   previewGrid.querySelectorAll('.rm').forEach(b=>b.onclick=()=>removeFile(+b.dataset.i));
-  fileCount.textContent=files.length?`已选 ${files.length} / ${MAX} 张`:'';
-  detectBtn.disabled=files.length===0;
+  fileCount.textContent=files.length?`已选 ${files.length} / ${MAX} 张`+(files.length<2?' (至少需要 2 张)':''):'';
+  detectBtn.disabled=files.length<2;
 }
 
 function removeFile(i){files.splice(i,1);thumbs.splice(i,1);renderPreview()}
@@ -357,6 +360,10 @@ clearBtn.addEventListener('click',()=>{files=[];thumbs=[];renderPreview()});
 /* ---- detect ---- */
 detectBtn.addEventListener('click',async()=>{
   if(!files.length) return;
+  if(files.length<2){
+    addHistory({status:'error',message:'至少需要 2 张图片才能检测动静态，请继续添加图片'},[...thumbs]);
+    return;
+  }
   loading.classList.add('show');detectBtn.disabled=true;
 
   const fd=new FormData();
@@ -387,6 +394,46 @@ detectBtn.addEventListener('click',async()=>{
 /* ---- result rendering ---- */
 const resultTextMap={static:'静态',dynamic:'动态',review:'人工复核'};
 let pairCounter=0;
+
+function dataURLtoBlob(url){
+  const a=url.split(','),m=a[0].match(/:(.*?);/)[1],b=atob(a[1]),u=new Uint8Array(b.length);
+  for(let i=0;i<b.length;i++) u[i]=b.charCodeAt(i);
+  return new Blob([u],{type:m});
+}
+
+async function redetect(btn){
+  const card=btn.closest('.result-card');
+  const imgs=card.querySelectorAll('.rc-thumbs img');
+  if(!imgs.length||imgs.length<2) return;
+
+  loading.classList.add('show');btn.disabled=true;
+
+  const fd=new FormData();
+  const curThumbs=[];
+  imgs.forEach((img,i)=>{
+    const src=img.src;
+    curThumbs.push(src);
+    const blob=dataURLtoBlob(src);
+    fd.append('images',new File([blob],`redetect_${i}.jpg`,{type:blob.type}));
+  });
+
+  // 使用当前左侧面板的策略参数
+  fd.append('weight_phash',(currentWeights.phash/100).toFixed(2));
+  fd.append('weight_ssim',(currentWeights.ssim/100).toFixed(2));
+  fd.append('weight_flow',(currentWeights.flow/100).toFixed(2));
+  fd.append('threshold_static',(currentThresholds.static/100).toFixed(2));
+  fd.append('threshold_dynamic',(currentThresholds.dynamic/100).toFixed(2));
+
+  try{
+    const res=await fetch('/api/detect/motion',{method:'POST',body:fd});
+    const data=await res.json();
+    addHistory(data,curThumbs);
+  }catch(err){
+    addHistory({status:'error',message:err.message},curThumbs);
+  }finally{
+    loading.classList.remove('show');btn.disabled=false;
+  }
+}
 
 function buildScoreBar(label, value, cls){
   if(value===undefined||value===null) return '';
@@ -453,7 +500,13 @@ function addHistory(data,previews){
   const pairHtml=buildPairDetails(data.pair_details,pairId);
 
   card.innerHTML=`
-    <div class="rc-head"><span class="rc-badge ${badgeCls}">${badgeText}</span><span class="rc-time">${now}</span></div>
+    <div class="rc-head">
+      <span class="rc-badge ${badgeCls}">${badgeText}</span>
+      <div style="display:flex;align-items:center;gap:10px">
+        <span class="rc-time">${now}</span>
+        <button class="rc-redetect" onclick="redetect(this)">&#x21bb; 重新检测</button>
+      </div>
+    </div>
     ${thumbsHtml}
     <div class="rc-scores">
       <div class="score-section">

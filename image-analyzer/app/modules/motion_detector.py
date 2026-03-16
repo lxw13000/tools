@@ -14,7 +14,7 @@
   - 权重自动归一化，某方法失败时自动排除并重新分配
 
 判定逻辑：
-  - 1 张图片 → 直接判定为静态（无比较对象）
+  - 1 张图片 → 拒绝检测（至少需要 2 张）
   - 2-6 张图片 → 计算融合评分与双阈值比较
     - 融合评分 >= 静态阈值 → 静态
     - 融合评分 <  动态阈值 → 动态
@@ -76,7 +76,7 @@ class MotionDetector:
         检测图片序列是静态、动态还是需要人工复核
 
         Args:
-            image_paths: 图片文件路径列表（1-6 张）
+            image_paths: 图片文件路径列表（2-6 张）
             weights:     可选的权重覆盖（前端传入），如 {'phash': 0.5, 'ssim': 0.3, 'flow': 0.2}
             thresholds:  可选的阈值覆盖（前端传入），如 {'static': 0.90, 'dynamic': 0.70}
 
@@ -104,20 +104,11 @@ class MotionDetector:
 
         result_map = {'static': '静态', 'dynamic': '动态', 'review': '人工复核'}
 
-        # ---- 单张图片直接判定为静态 ----
-        if len(image_paths) == 1:
-            elapsed = round(time.time() - start_time, 2)
+        # ---- 单张图片无法比较，拒绝检测 ----
+        if len(image_paths) < 2:
             return {
-                "status": "success",
-                "result": "static",
-                "result_text": "静态",
-                "fusion_score": 1.0,
-                "scores": {},
-                "weights_used": w,
-                "thresholds_used": t,
-                "pair_details": {"phash": [], "ssim": [], "flow": []},
-                "message": "只有一张图片，判定为静态",
-                "elapsed_seconds": elapsed,
+                "status": "error",
+                "message": "至少需要 2 张图片才能检测动静态，当前仅 1 张",
             }
 
         # ---- 多张图片：三维融合评分 ----
