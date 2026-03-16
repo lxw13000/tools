@@ -16,9 +16,8 @@ import os
 import uuid
 import logging
 import yaml
+from .logging_config import setup_logging
 from .modules import MotionDetector, NSFWDetector, FusionDetector, SchedulerService
-
-logger = logging.getLogger(__name__)
 
 # 动态检测允许的最大图片数量
 MAX_MOTION_IMAGES = 6
@@ -40,6 +39,10 @@ def load_config():
 
 
 config = load_config()
+
+# ---- 初始化日志系统（最早执行，后续所有模块继承配置）----
+setup_logging(config)
+logger = logging.getLogger(__name__)
 
 # ---- 应用配置 ----
 if config:

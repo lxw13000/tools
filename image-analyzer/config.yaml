@@ -1,5 +1,12 @@
 # 图片分析系统配置文件
 
+# 日志配置
+logging:
+  level: "INFO"                   # 日志级别: DEBUG / INFO / WARNING / ERROR
+  log_dir: "/app/logs"            # 日志文件目录
+  max_bytes: 52428800             # 单个日志文件最大 50MB
+  backup_count: 5                 # 保留 5 个历史文件（app.log.1 ~ app.log.5）
+
 # 服务器配置
 server:
   host: "0.0.0.0"

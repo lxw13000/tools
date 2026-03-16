@@ -23,7 +23,9 @@ echo ""
 
 # 创建上传目录
 mkdir -p uploads
-echo "✅ 创建上传目录"
+# 创建日志目录
+mkdir -p logs
+echo "✅ 创建上传/日志目录"
 echo ""
 
 # 构建并启动服务

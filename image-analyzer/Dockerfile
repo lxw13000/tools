@@ -41,6 +41,9 @@ RUN mkdir -p /app/models
 # 创建上传目录
 RUN mkdir -p /tmp/uploads
 
+# 创建日志目录
+RUN mkdir -p /app/logs
+
 # 暴露端口
 EXPOSE 5000
 
@@ -49,4 +52,15 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:5000/api/health || exit 1
 
 # 使用gunicorn运行应用（生产环境）
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "1", "--threads", "2", "--timeout", "120", "--preload", "app.app:app"]
+# --access-logfile / --error-logfile 落盘到 /app/logs（通过 volume 挂载到宿主机）
+# 同时 --log-level info 保留 stdout 输出供 docker logs 查看
+CMD ["gunicorn", \
+     "--bind", "0.0.0.0:5000", \
+     "--workers", "1", \
+     "--threads", "2", \
+     "--timeout", "120", \
+     "--preload", \
+     "--access-logfile", "/app/logs/access.log", \
+     "--error-logfile", "/app/logs/error.log", \
+     "--log-level", "info", \
+     "app.app:app"]

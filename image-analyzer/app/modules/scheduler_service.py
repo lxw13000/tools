@@ -8,28 +8,23 @@ status 映射:
   0=已关播  1=待检测  2=检测中  3=通过  4=疑似  5=检测失败
 
 riskLevel 映射（基于 fusion_score）:
-  < dynamic_threshold (0.75)  → 正常 (status=3)
-  [0.75, risk_mid)            → 疑似 (status=4)
-  [risk_mid, static_threshold)→ 中风险挂播 (status=4)
-  >= static_threshold (0.95)  → 高风险挂播 (status=4)
+  < dynamic_threshold (0.75)  → low (status=3)
+  [0.75, risk_mid)            → medium (status=4)
+  [risk_mid, static_threshold)→ high (status=4)
+  >= static_threshold (0.95)  → critical (status=4)
 """
 
 import os
-import sys
 import uuid
 import time
+import logging
 import threading
 import traceback
 import requests
 from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
 
-
-def _log(msg, *args):
-    """打印日志到 stdout（gunicorn/Docker 下可靠输出）"""
-    ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    text = msg % args if args else msg
-    print(f"[{ts}] [scheduler] {text}", flush=True)
+logger = logging.getLogger(__name__)
 
 
 class SchedulerService:
@@ -44,8 +39,9 @@ class SchedulerService:
         self.scheduler = BackgroundScheduler()
         self.history = []
         self._running = False
+        self._lock = threading.Lock()       # 保护 _running 的互斥锁
         self._last_run = None
-        self._current_step = ''       # 当前执行步骤（供前端轮询）
+        self._current_step = ''
 
         # 阈值
         thresholds = self.motion_config.get('thresholds', {})
@@ -62,8 +58,8 @@ class SchedulerService:
         self.timeout = int(self.scheduler_config.get('timeout', 30))
         self.image_download_timeout = int(self.scheduler_config.get('image_download_timeout', 15))
 
-        _log("SchedulerService 初始化完成, base_url=%s, fetch=%s, callback=%s",
-             self.base_url, self.fetch_path, self.callback_path)
+        logger.info("SchedulerService 初始化完成, base_url=%s, fetch=%s, callback=%s",
+                     self.base_url, self.fetch_path, self.callback_path)
 
     def start(self):
         """启动定时调度器"""
@@ -73,21 +69,23 @@ class SchedulerService:
             id='scheduler_batch', replace_existing=True,
         )
         self.scheduler.start()
-        _log("定时检测服务已启动，间隔 %d 分钟", interval)
+        logger.info("定时检测服务已启动，间隔 %d 分钟", interval)
 
     def stop(self):
         """停止调度器"""
         if self.scheduler.running:
             self.scheduler.shutdown(wait=False)
-            _log("定时检测服务已停止")
+            logger.info("定时检测服务已停止")
 
     def run_batch(self):
         """单次批次执行（定时触发或手动触发）"""
-        if self._running:
-            _log("上一批次仍在执行，跳过本次触发")
-            return
+        # 用锁保护 _running 标志，防止竞态
+        with self._lock:
+            if self._running:
+                logger.warning("上一批次仍在执行，跳过本次触发")
+                return
+            self._running = True
 
-        self._running = True
         self._current_step = '开始执行'
         batch_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         self._last_run = batch_time
@@ -96,14 +94,14 @@ class SchedulerService:
             'fetch_count': 0,
             'items': [],
             'error': None,
-            'steps': [],       # 记录每一步的日志
+            'steps': [],
         }
 
         def step(msg):
             ts = datetime.now().strftime('%H:%M:%S')
             batch_record['steps'].append(f"[{ts}] {msg}")
             self._current_step = msg
-            _log(msg)
+            logger.info("[batch] %s", msg)
 
         try:
             # 1. 拉取待检测数据
@@ -135,10 +133,11 @@ class SchedulerService:
         except Exception as e:
             err_msg = f"批次执行异常: {type(e).__name__}: {e}"
             step(err_msg)
-            _log("异常堆栈:\n%s", traceback.format_exc())
+            logger.error("批次异常堆栈:\n%s", traceback.format_exc())
             batch_record['error'] = err_msg
         finally:
-            self._running = False
+            with self._lock:
+                self._running = False
             self._current_step = ''
             # FIFO 保留最近 max_history 条
             self.history.insert(0, batch_record)
@@ -154,13 +153,13 @@ class SchedulerService:
             'id': item_id,
             'picUrls': pic_urls,
             'status': None,
-            'riskLevel': None,      # 英文 code: low/medium/high/critical
-            'riskLabel': None,      # 中文标签: 正常/疑似/中风险挂播/高风险挂播
+            'riskLevel': None,
+            'riskLabel': None,
             'scores': {},
             'callback_ok': False,
             'callback_error': None,
             'error': None,
-            'elapsed': 0,           # 耗时（秒）
+            'elapsed': 0,
         }
         temp_files = []
 
@@ -176,7 +175,7 @@ class SchedulerService:
 
             # 下载图片到临时目录
             step(f"  item {item_id}: 开始下载 {len(pic_urls)} 张图片")
-            for i, url in enumerate(pic_urls):
+            for url in pic_urls:
                 local_path = self._download_image(url, step)
                 if local_path:
                     temp_files.append(local_path)
@@ -193,7 +192,8 @@ class SchedulerService:
             # 调用动态检测器
             step(f"  item {item_id}: 开始三维融合检测...")
             detect_result = self.motion_detector.detect(temp_files)
-            step(f"  item {item_id}: 检测完成, status={detect_result.get('status')}, result={detect_result.get('result')}")
+            step(f"  item {item_id}: 检测完成, status={detect_result.get('status')}, "
+                 f"result={detect_result.get('result')}")
 
             if detect_result.get('status') == 'error':
                 record['status'] = 5
@@ -218,7 +218,8 @@ class SchedulerService:
             record['status'] = status
             record['riskLevel'] = risk_code
             record['riskLabel'] = risk_label
-            step(f"  item {item_id}: fusion={fusion_score:.4f}, status={status}, risk={risk_code}({risk_label})")
+            step(f"  item {item_id}: fusion={fusion_score:.4f}, "
+                 f"status={status}, risk={risk_code}({risk_label})")
 
             # 回调
             self._do_callback(record, step)
@@ -226,7 +227,7 @@ class SchedulerService:
         except Exception as e:
             err_msg = f"{type(e).__name__}: {e}"
             step(f"  item {item_id}: 处理异常 - {err_msg}")
-            _log("item %s 异常堆栈:\n%s", item_id, traceback.format_exc())
+            logger.error("item %s 异常堆栈:\n%s", item_id, traceback.format_exc())
             record['status'] = 5
             record['riskLevel'] = 'error'
             record['riskLabel'] = '检测失败'
@@ -252,7 +253,6 @@ class SchedulerService:
             resp = requests.get(url, timeout=self.image_download_timeout)
             resp.raise_for_status()
 
-            # 从 URL 提取文件名
             filename = url.split('/')[-1].split('?')[0] or 'image.jpg'
             local_name = f"scheduler_{uuid.uuid4().hex[:8]}_{filename}"
             upload_dir = '/tmp/uploads'
@@ -291,7 +291,7 @@ class SchedulerService:
             'ssimScore': record.get('scores', {}).get('ssimScore', 0),
             'flowScore': record.get('scores', {}).get('flowScore', 0),
             'phashScore': record.get('scores', {}).get('phashScore', 0),
-            'riskLevel': record['riskLevel'],       # 英文 code: low/medium/high/critical
+            'riskLevel': record['riskLevel'],
             'checkEndTime': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         }
 
@@ -341,8 +341,9 @@ class SchedulerService:
 
     def trigger_manual(self):
         """手动触发一次批次执行（子线程运行，不阻塞 Flask）"""
-        if self._running:
-            return False, '上一批次仍在执行中'
+        with self._lock:
+            if self._running:
+                return False, '上一批次仍在执行中'
         t = threading.Thread(target=self.run_batch, daemon=True)
         t.start()
         return True, '已触发执行'

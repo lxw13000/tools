@@ -16,6 +16,8 @@ services:
       - ./models:/app/models:ro
       # 挂载上传目录（可选）
       - ./uploads:/tmp/uploads
+      # 挂载日志目录，宿主机可直接查看 .log 文件
+      - ./logs:/app/logs
     environment:
       - FLASK_ENV=production
       - PYTHONUNBUFFERED=1
