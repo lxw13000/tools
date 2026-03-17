@@ -1,20 +1,28 @@
+# ===== Web 框架 =====
 Flask==3.0.0
 Flask-CORS==4.0.0
-Pillow==10.1.0
-opencv-python-headless==4.8.1.78
-numpy==1.24.3
-imagehash==4.3.1
-scikit-image>=0.21.0
 gunicorn==21.2.0
 PyYAML>=6.0.2
-# MobileNet V2 (GantMan 5-class)
+
+# ===== 图像处理 =====
+Pillow==10.1.0
+opencv-python-headless==4.8.1.78
+numpy>=1.24.3,<2.0
+imagehash==4.3.1
+scikit-image>=0.21.0
+
+# ===== MobileNet V2 (GantMan 5-class) =====
 tensorflow==2.15.0
 tensorflow-hub==0.16.1
-# OpenNSFW2 (Yahoo)
+
+# ===== OpenNSFW2 (Yahoo) =====
 opennsfw2>=0.10.0
-# Falconsai ViT
+
+# ===== Falconsai ViT =====
+# torch 通过 Dockerfile 单独安装 CPU 版本
 transformers==4.46.0
 huggingface-hub==0.26.0
-# 定时检测服务
+
+# ===== 定时检测服务 =====
 requests>=2.31.0
 APScheduler>=3.10.0

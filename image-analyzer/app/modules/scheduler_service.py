@@ -107,7 +107,7 @@ class SchedulerService:
             # 1. 拉取待检测数据
             fetch_url = self.base_url + self.fetch_path
             step(f"正在拉取数据: GET {fetch_url}")
-            resp = requests.get(fetch_url, timeout=self.timeout)
+            resp = requests.get(fetch_url, timeout=self.timeout, headers=self._HEADERS)
             step(f"拉取响应: HTTP {resp.status_code}, 长度 {len(resp.content)} bytes")
             resp.raise_for_status()
 
@@ -247,11 +247,27 @@ class SchedulerService:
 
         return record
 
+    # 浏览器 UA，避免被 CDN/对象存储拦截
+    _HEADERS = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                      'AppleWebKit/537.36 (KHTML, like Gecko) '
+                      'Chrome/120.0.0.0 Safari/537.36',
+    }
+
     def _download_image(self, url, step):
         """下载单张图片，返回本地路径"""
         try:
-            resp = requests.get(url, timeout=self.image_download_timeout)
+            resp = requests.get(
+                url,
+                timeout=(self.image_download_timeout, self.image_download_timeout * 2),
+                headers=self._HEADERS,
+            )
             resp.raise_for_status()
+
+            # 限制最大 50MB，防止内存溢出
+            if len(resp.content) > 50 * 1024 * 1024:
+                step(f"    图片过大 ({len(resp.content)} bytes)，跳过: {url}")
+                return None
 
             filename = url.split('/')[-1].split('?')[0] or 'image.jpg'
             local_name = f"scheduler_{uuid.uuid4().hex[:8]}_{filename}"
@@ -297,7 +313,8 @@ class SchedulerService:
 
         step(f"  回调: POST {callback_url}, payload={payload}")
         try:
-            resp = requests.post(callback_url, json=payload, timeout=self.timeout)
+            resp = requests.post(callback_url, json=payload, timeout=self.timeout,
+                                 headers=self._HEADERS)
             step(f"  回调响应: HTTP {resp.status_code}, body={resp.text[:200]}")
             resp.raise_for_status()
             record['callback_ok'] = True

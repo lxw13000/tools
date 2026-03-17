@@ -56,6 +56,9 @@ class FusionDetector:
         # 决策策略
         self.strategy = 'weighted_average'
 
+        # 合法策略列表
+        _valid_strategies = {'weighted_average', 'any_block', 'majority'}
+
         # 从配置文件覆盖默认值
         if config and 'nsfw_detection' in config:
             fusion = config['nsfw_detection'].get('fusion', {})
@@ -66,10 +69,13 @@ class FusionDetector:
                 if k in self.thresholds:
                     self.thresholds[k] = float(v)
             if 'strategy' in fusion:
-                self.strategy = fusion['strategy']
+                s = fusion['strategy']
+                if s in _valid_strategies:
+                    self.strategy = s
+                else:
+                    logger.warning("FusionDetector: 无效策略 '%s', 使用默认 weighted_average", s)
 
-        logger.info("FusionDetector 初始化完成, weights=%s, thresholds=%s, strategy=%s",
-                     self.weights, self.thresholds, self.strategy)
+        logger.info("FusionDetector 初始化完成, strategy=%s", self.strategy)
 
     def detect(self, image_path: str, models: Optional[List[str]] = None,
                thresholds: Optional[Dict[str, Dict]] = None) -> Dict:

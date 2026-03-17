@@ -14,15 +14,15 @@ NSFW 检测服务门面 (Facade)
   - 'pass'   — 放行（所有指标均低于复审阈值）
   - status='error' 时表示检测失败（模型加载/推理异常等）
 
-设计要点：
-  - 所有模型均为懒加载（首次调用时初始化），避免启动时占用过多内存
-  - 阈值支持配置文件默认值 + API 调用时动态覆盖
-  - 性感(sexy)独立参与阈值评判
+线程安全设计：
+  - 模型懒加载使用 Lock 保护，防止多线程重复初始化
+  - 模型推理使用 Lock 串行化，因 TF/Keras predict() 非线程安全
 """
 
 import os
 import time
 import logging
+import threading
 import numpy as np
 from PIL import Image
 from typing import Dict, Optional, List
@@ -35,23 +35,23 @@ logger = logging.getLogger(__name__)
 MODEL_REGISTRY = {
     'opennsfw2': {
         'name': 'OpenNSFW2 (Yahoo)',
-        'type': 'opennsfw2',           # 模型类型标识，路由用
+        'type': 'opennsfw2',
         'accuracy': '较高',
         'speed': '快',
         'size': '~23MB',
         'desc': 'Yahoo OpenNSFW ResNet-50，二分类，自动下载',
-        'output': 'binary',            # 输出类型：二分类（nsfw/normal）
+        'output': 'binary',
     },
     'mobilenet': {
         'name': 'MobileNet V2 140',
-        'type': 'tf_gantman',          # GantMan 的 TF 模型
+        'type': 'tf_gantman',
         'file': 'mobilenet_v2_140_224.h5',
-        'input_size': 224,             # 模型输入尺寸 224x224
+        'input_size': 224,
         'accuracy': '较高',
         'speed': '最快',
         'size': '~17MB',
         'desc': 'GantMan 5 分类，可输出内容分类(人物/动漫/风景)',
-        'output': '5class',            # 输出类型：5 分类
+        'output': '5class',
     },
     'falconsai': {
         'name': 'Falconsai ViT',
@@ -72,79 +72,75 @@ class NSFWDetector:
     """NSFW 检测门面：管理所有检测器实例，路由 detect() 调用，输出统一标签格式"""
 
     def __init__(self, models_dir: str = '/app/models', config: Dict = None):
-        """
-        初始化 NSFW 检测门面
-
-        Args:
-            models_dir: 模型文件所在目录路径
-            config:     全局配置字典（来自 config.yaml）
-        """
         self.models_dir = models_dir
         self.config = config or {}
 
-        # 三个模型实例均为懒加载（None 表示尚未初始化）
-        self._tf_model = None       # MobileNet TF 模型对象
-        self._opennsfw2 = None      # OpenNSFW2Detector 实例
-        self._falconsai = None      # FalconsaiDetector 实例
+        # 模型实例（懒加载，None 表示尚未初始化）
+        self._tf_model = None
+        self._opennsfw2 = None
+        self._falconsai = None
 
-        # MobileNet 5-class 阈值默认值（可通过配置文件覆盖）
-        # porn:        色情单项 > 此值 → 拦截
-        # hentai:      动漫色情 > 此值 → 复审
-        # sexy:        性感 > 此值 → 复审
-        # porn_hentai: 色情+动漫组合 > 此值 → 拦截
+        # 线程锁：保护懒加载和模型推理的线程安全
+        self._load_lock = threading.Lock()
+        self._infer_lock = threading.Lock()
+
+        # MobileNet 5-class 默认阈值
         self.mobilenet_thresholds = {
             'porn': 0.6,
             'hentai': 0.5,
             'sexy': 0.7,
             'porn_hentai': 0.65,
         }
-        # 从配置文件读取阈值覆盖默认值
         if config and 'nsfw_detection' in config:
             t = config['nsfw_detection'].get('thresholds', {})
             for key in self.mobilenet_thresholds:
                 if key in t:
                     self.mobilenet_thresholds[key] = float(t[key])
 
-        logger.info("NSFWDetector 初始化完成, models_dir=%s, mobilenet阈值=%s",
-                     models_dir, self.mobilenet_thresholds)
+        logger.info("NSFWDetector 初始化完成, models_dir=%s", models_dir)
 
-    # ---- 懒加载：首次使用时才初始化模型，避免启动时内存占用过高 ----
+    # ---- 懒加载（Lock 保护，防止多线程重复初始化）----
 
     def _get_opennsfw2(self):
-        """获取 OpenNSFW2 检测器实例（懒加载）"""
-        if self._opennsfw2 is None:
-            logger.info("OpenNSFW2: 首次调用，开始初始化检测器")
-            from .opennsfw2_detector import OpenNSFW2Detector
-            self._opennsfw2 = OpenNSFW2Detector(config=self.config)
-            logger.info("OpenNSFW2: 检测器实例创建完成")
+        """获取 OpenNSFW2 检测器实例（线程安全懒加载）"""
+        if self._opennsfw2 is not None:
+            return self._opennsfw2
+        with self._load_lock:
+            if self._opennsfw2 is None:
+                logger.info("OpenNSFW2: 首次调用，初始化检测器")
+                from .opennsfw2_detector import OpenNSFW2Detector
+                self._opennsfw2 = OpenNSFW2Detector(config=self.config)
         return self._opennsfw2
 
     def _get_falconsai(self):
-        """获取 Falconsai ViT 检测器实例（懒加载）"""
-        if self._falconsai is None:
-            logger.info("Falconsai: 首次调用，开始初始化检测器")
-            from .falconsai_detector import FalconsaiDetector
-            self._falconsai = FalconsaiDetector(
-                model_dir=os.path.join(self.models_dir, 'falconsai'),
-                config=self.config,
-            )
-            logger.info("Falconsai: 检测器实例创建完成")
+        """获取 Falconsai ViT 检测器实例（线程安全懒加载）"""
+        if self._falconsai is not None:
+            return self._falconsai
+        with self._load_lock:
+            if self._falconsai is None:
+                logger.info("Falconsai: 首次调用，初始化检测器")
+                from .falconsai_detector import FalconsaiDetector
+                self._falconsai = FalconsaiDetector(
+                    model_dir=os.path.join(self.models_dir, 'falconsai'),
+                    config=self.config,
+                )
         return self._falconsai
 
     def _load_tf_model(self):
-        """加载 MobileNet V2 140 TF 模型（懒加载）"""
+        """加载 MobileNet V2 140 TF 模型（线程安全懒加载）"""
         if self._tf_model is not None:
             return self._tf_model
-        cfg = MODEL_REGISTRY['mobilenet']
-        path = os.path.join(self.models_dir, cfg['file'])
-        if not os.path.exists(path):
-            raise FileNotFoundError(f"模型文件不存在: {cfg['file']}")
-        logger.info("MobileNet: 首次调用，开始加载模型 %s", cfg['file'])
-        # 加载 .h5 模型，需注册 KerasLayer 自定义对象
-        self._tf_model = tf.keras.models.load_model(
-            path, custom_objects={'KerasLayer': hub.KerasLayer}, compile=False
-        )
-        logger.info("MobileNet: 模型加载完成")
+        with self._load_lock:
+            if self._tf_model is None:
+                cfg = MODEL_REGISTRY['mobilenet']
+                path = os.path.join(self.models_dir, cfg['file'])
+                if not os.path.exists(path):
+                    raise FileNotFoundError(f"模型文件不存在: {cfg['file']}")
+                logger.info("MobileNet: 开始加载模型 %s", cfg['file'])
+                self._tf_model = tf.keras.models.load_model(
+                    path, custom_objects={'KerasLayer': hub.KerasLayer}, compile=False
+                )
+                logger.info("MobileNet: 模型加载完成")
         return self._tf_model
 
     # ---- 公开 API ----
@@ -166,23 +162,24 @@ class NSFWDetector:
         return result
 
     def _check_available(self, model_id: str) -> bool:
-        """检查指定模型是否可用（依赖已安装且模型文件存在）"""
+        """检查指定模型是否可用（仅检查依赖和文件，不触发模型加载）"""
         cfg = MODEL_REGISTRY.get(model_id)
         if not cfg:
             return False
-        if cfg['type'] == 'opennsfw2':
-            try:
+        try:
+            if cfg['type'] == 'opennsfw2':
                 import opennsfw2
                 return True
-            except ImportError:
-                return False
-        elif cfg['type'] == 'falconsai':
-            try:
-                return self._get_falconsai().is_available()
-            except Exception:
-                return False
-        elif cfg['type'] == 'tf_gantman':
-            return os.path.exists(os.path.join(self.models_dir, cfg['file']))
+            elif cfg['type'] == 'falconsai':
+                # 仅检查文件存在性，不触发完整初始化
+                from .falconsai_detector import FalconsaiDetector
+                return FalconsaiDetector.check_files(
+                    os.path.join(self.models_dir, 'falconsai')
+                )
+            elif cfg['type'] == 'tf_gantman':
+                return os.path.exists(os.path.join(self.models_dir, cfg['file']))
+        except Exception:
+            return False
         return False
 
     def get_default_thresholds(self) -> Dict:
@@ -197,55 +194,40 @@ class NSFWDetector:
         Args:
             image_path: 图片文件绝对路径
             model_id:   模型标识 'mobilenet' | 'opennsfw2' | 'falconsai'
-            thresholds: 阈值覆盖字典（可选），key 含义取决于模型类型：
-                        mobilenet:  {porn, hentai, sexy, porn_hentai}
-                        二分类模型: {nsfw_block, nsfw_review}
+            thresholds: 阈值覆盖字典（可选）
 
         Returns:
-            dict: 统一格式
-                成功: {status:'success', model, model_id, elapsed_seconds, image_size,
-                       raw_scores, content_type, safety{色情,性感,正常},
-                       action, action_text, details}
-                失败: {status:'error', message}
+            dict: 统一格式的检测结果
         """
         if model_id not in MODEL_REGISTRY:
             logger.warning("NSFWDetector: 未知模型 %s", model_id)
             return {"status": "error", "message": f"未知模型: {model_id}"}
 
         cfg = MODEL_REGISTRY[model_id]
-        logger.info("NSFWDetector: 开始检测, model=%s(%s), image=%s",
-                     model_id, cfg['name'], image_path)
+        logger.debug("NSFWDetector: 开始检测, model=%s, image=%s", model_id, image_path)
 
-        # 根据模型类型路由到对应的检测实现
-        if cfg['type'] == 'opennsfw2':
-            return self._get_opennsfw2().detect(image_path, thresholds=thresholds)
-
-        if cfg['type'] == 'falconsai':
-            return self._get_falconsai().detect(image_path, thresholds=thresholds)
-
-        if cfg['type'] == 'tf_gantman':
-            return self._detect_mobilenet(image_path, thresholds)
+        # 路由到对应模型，统一捕获初始化异常
+        try:
+            if cfg['type'] == 'opennsfw2':
+                return self._get_opennsfw2().detect(image_path, thresholds=thresholds)
+            if cfg['type'] == 'falconsai':
+                return self._get_falconsai().detect(image_path, thresholds=thresholds)
+            if cfg['type'] == 'tf_gantman':
+                return self._detect_mobilenet(image_path, thresholds)
+        except Exception as e:
+            logger.exception("NSFWDetector: 模型 %s 检测失败", model_id)
+            return {"status": "error", "message": f"{cfg['name']} 检测失败: {str(e)}"}
 
         return {"status": "error", "message": f"未知模型类型: {cfg['type']}"}
 
     # ---- MobileNet V2 140 (5-class) 检测实现 ----
 
     def _detect_mobilenet(self, image_path: str, thresholds: Optional[Dict] = None) -> Dict:
-        """
-        MobileNet V2 140 五分类检测
-
-        模型输出 5 个类别概率：drawings, hentai, neutral, porn, sexy
-        映射为统一的安全分类和内容分类标签。
-
-        Args:
-            image_path: 图片文件绝对路径
-            thresholds: 阈值覆盖字典 {porn, hentai, sexy, porn_hentai}
-        """
+        """MobileNet V2 140 五分类检测（含线程安全推理）"""
         if not os.path.exists(image_path):
             logger.warning("MobileNet: 图片文件不存在 %s", image_path)
             return {"status": "error", "message": "图片文件不存在"}
 
-        # 使用传入阈值，若未传则用配置文件/默认阈值
         t = thresholds if thresholds else self.mobilenet_thresholds
 
         try:
@@ -253,51 +235,43 @@ class NSFWDetector:
             model = self._load_tf_model()
             file_size = os.path.getsize(image_path)
 
-            # ---- 图片预处理：缩放到 224x224，归一化到 [-1, 1] ----
+            # 图片预处理：缩放到 224x224，归一化到 [-1, 1]
             with Image.open(image_path) as img:
                 img_rgb = img.convert('RGB')
                 dim = MODEL_REGISTRY['mobilenet']['input_size']
                 img_resized = img_rgb.resize((dim, dim), Image.Resampling.BILINEAR)
                 arr = np.asarray(img_resized, dtype=np.float32)
-            # MobileNet V2 预处理：像素值从 [0, 255] 归一化到 [-1, 1]
+                img_resized.close()
+                img_rgb.close()
+
             arr = (arr / 127.5) - 1.0
-            arr = np.expand_dims(arr, 0)  # 增加 batch 维度
+            arr = np.expand_dims(arr, 0)
 
-            # ---- 模型推理 ----
-            preds = model.predict(arr, verbose=0)[0]
-            # 构建原始分数字典：{drawings: 0.xx, hentai: 0.xx, neutral: 0.xx, porn: 0.xx, sexy: 0.xx}
+            # 模型推理（Lock 串行化，Keras predict 非线程安全）
+            with self._infer_lock:
+                preds = model.predict(arr, verbose=0)[0]
+
             raw = {name: round(float(preds[i]), 4) for i, name in enumerate(GANTMAN_CLASSES)}
-
             elapsed = round(time.time() - start, 2)
 
-            # ---- 内容分类映射 ----
-            # 人物 = porn + sexy + neutral（包含人物主体的类别）
-            # 动漫 = hentai（动漫/插画类）
-            # 风景 = drawings（风景/绘画类）
+            # 内容分类映射
             content_type = {
                 '人物': round(raw['porn'] + raw['sexy'] + raw['neutral'], 4),
                 '动漫': round(raw['hentai'], 4),
                 '风景': round(raw['drawings'], 4),
             }
 
-            # ---- 安全分类映射 ----
-            # 色情 = porn + hentai（包含真人色情和动漫色情）
-            # 性感 = sexy（独立分出，参与阈值评判）
-            # 正常 = neutral + drawings（安全内容）
+            # 安全分类映射
             safety = {
                 '色情': round(raw['porn'] + raw['hentai'], 4),
                 '性感': round(raw['sexy'], 4),
                 '正常': round(raw['neutral'] + raw['drawings'], 4),
             }
 
-            # ---- 阈值级联决策 ----
             action, action_text, details = self._mobilenet_decision(raw, t)
 
-            elapsed = round(time.time() - start, 2)
-            logger.info("MobileNet: 检测完成, action=%s, 色情=%.4f, 性感=%.4f, 正常=%.4f, "
-                        "image_size=%d, elapsed=%.2fs",
-                        action, safety['色情'], safety['性感'], safety['正常'],
-                        file_size, elapsed)
+            logger.info("MobileNet: action=%s, 色情=%.4f, 性感=%.4f, elapsed=%.2fs",
+                        action, safety['色情'], safety['性感'], elapsed)
 
             return {
                 'status': 'success',
@@ -319,36 +293,22 @@ class NSFWDetector:
 
     def _mobilenet_decision(self, raw: Dict, t: Dict):
         """
-        MobileNet 5-class 阈值级联决策
-
-        按优先级从高到低依次判定（命中即停止）：
-          1. porn 单项 > porn 阈值        → block（拦截）
-          2. porn + hentai > 组合阈值      → block（拦截）
-          3. hentai 单项 > hentai 阈值     → review（复审）
-          4. sexy 单项 > sexy 阈值         → review（复审）
-          5. 均未触发                       → pass（放行）
-
-        Args:
-            raw: 模型原始 5 分类分数 {drawings, hentai, neutral, porn, sexy}
-            t:   阈值字典 {porn, hentai, sexy, porn_hentai}
+        MobileNet 5-class 阈值级联决策（优先级从高到低，命中即停止）
 
         Returns:
             (action, action_text, details) 三元组
         """
         details = []
-
         porn = raw.get('porn', 0)
         hentai = raw.get('hentai', 0)
         sexy = raw.get('sexy', 0)
-        combined = porn + hentai  # 色情 + 动漫色情组合分数
+        combined = porn + hentai
 
-        # 读取阈值（支持部分覆盖，未覆盖的用默认值）
         pt = t.get('porn', 0.6)
         ht = t.get('hentai', 0.5)
         st = t.get('sexy', 0.7)
         ct = t.get('porn_hentai', 0.65)
 
-        # 级联判定：优先级 porn > porn+hentai > hentai > sexy
         if porn > pt:
             action = 'block'
             details.append(f"色情 {porn:.2%} > 阈值 {pt:.2%}")

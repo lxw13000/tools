@@ -13,6 +13,7 @@ from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 import os
+import json
 import uuid
 import logging
 import yaml
@@ -34,7 +35,9 @@ def load_config():
         with open(config_path, 'r', encoding='utf-8') as f:
             return yaml.safe_load(f)
     except Exception as e:
-        logger.warning("无法加载配置文件 %s, 使用默认配置. 错误: %s", config_path, e)
+        # 此时 logger 尚未初始化，用 print 输出到 stderr
+        import sys
+        print(f"[WARN] 无法加载配置文件 {config_path}, 使用默认配置. 错误: {e}", file=sys.stderr)
         return None
 
 
@@ -422,7 +425,6 @@ def detect_nsfw_check():
 
         # 如果 modelStrategy 是字符串（form 提交），尝试解析为 JSON
         if isinstance(model_strategy, str):
-            import json
             try:
                 model_strategy = json.loads(model_strategy) if model_strategy else None
             except (json.JSONDecodeError, ValueError):
@@ -449,6 +451,12 @@ def request_entity_too_large(error):
     """请求体超出大小限制"""
     max_mb = app.config['MAX_CONTENT_LENGTH'] // (1024 * 1024)
     return jsonify({"status": "error", "message": f"文件过大，最大支持{max_mb}MB"}), 413
+
+
+@app.errorhandler(404)
+def not_found(error):
+    """请求路径不存在"""
+    return jsonify({"status": "error", "message": "接口不存在"}), 404
 
 
 @app.errorhandler(500)

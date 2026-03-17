@@ -8,6 +8,8 @@ NSFW 内容安全检测服务
   - 信号量限流：限制同时执行的检测任务数量，防止 CPU/内存耗尽
   - 排队超时：信号量等待超时直接返回 503，防止请求堆积雪崩
   - 图片下载超时 + 大小限制：防止慢连接和超大文件阻塞
+  - URL 安全校验：仅允许 http/https，阻止私有地址 SSRF 攻击
+  - 下载后图片格式验证：确保文件为有效图片再交给模型
   - 全链路 try/except：每个环节独立捕获异常，不影响其他业务
   - 临时文件强制清理：finally 块确保磁盘不泄漏
   - 请求 ID 日志追踪：贯穿整条调用链路，便于排查问题
@@ -16,12 +18,18 @@ NSFW 内容安全检测服务
 import os
 import uuid
 import time
+import socket
+import ipaddress
 import logging
 import threading
 import requests as http_requests
 from urllib.parse import urlparse, unquote
+from PIL import Image
 
 logger = logging.getLogger(__name__)
+
+# 允许的 URL 协议
+_ALLOWED_SCHEMES = {'http', 'https'}
 
 
 class NsfwService:
@@ -112,12 +120,12 @@ class NsfwService:
         filepath = None
         try:
             # ---- 下载图片 ----
-            filepath = self._download_image(img_url, request_id)
+            filepath, download_err = self._download_image(img_url, request_id)
             if filepath is None:
                 elapsed = round(time.time() - start_time, 2)
                 return {
                     "status": "error",
-                    "message": "图片下载失败，请检查 URL 是否可访问",
+                    "message": download_err or "图片下载失败",
                     "request_id": request_id,
                     "imgUrl": img_url,
                     "elapsed_seconds": elapsed,
@@ -190,77 +198,201 @@ class NsfwService:
                     request_id, model_id, models, strategy)
         return model_id, models, strategy, thresholds
 
+    # SSRF 防护：仅拦截真正的内网/回环地址段
+    # 不使用 ipaddress.is_private（会误杀 198.18.0.0/15 等 CDN 常用段）
+    _SSRF_BLOCKED_NETS = [
+        ipaddress.ip_network('127.0.0.0/8'),       # IPv4 回环
+        ipaddress.ip_network('10.0.0.0/8'),         # RFC 1918 A 类内网
+        ipaddress.ip_network('172.16.0.0/12'),      # RFC 1918 B 类内网
+        ipaddress.ip_network('192.168.0.0/16'),     # RFC 1918 C 类内网
+        ipaddress.ip_network('169.254.0.0/16'),     # IPv4 链路本地
+        ipaddress.ip_network('0.0.0.0/8'),          # 当前网络
+        ipaddress.ip_network('::1/128'),            # IPv6 回环
+        ipaddress.ip_network('fe80::/10'),          # IPv6 链路本地
+        ipaddress.ip_network('fc00::/7'),           # IPv6 ULA 内网
+    ]
+
+    @classmethod
+    def _is_ssrf_ip(cls, hostname):
+        """
+        检查主机名是否解析到内网/回环地址（防止 SSRF 攻击）
+
+        仅拦截 RFC 1918 内网段、回环地址、链路本地地址。
+        不使用 Python ipaddress.is_private（会误判 198.18.0.0/15 等 CDN 常用段）。
+        DNS 解析失败不拦截，交给后续 HTTP 请求自然报错。
+        """
+        try:
+            addr_info = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+            if not addr_info:
+                return False
+            # 只要有任一 IP 不在拦截列表就放行
+            for family, _, _, _, sockaddr in addr_info:
+                ip = ipaddress.ip_address(sockaddr[0])
+                in_blocked = any(ip in net for net in cls._SSRF_BLOCKED_NETS)
+                if not in_blocked:
+                    return False  # 存在非内网 IP，放行
+            # 所有解析结果均为内网地址
+            return True
+        except (socket.gaierror, ValueError):
+            return False
+
+    def _validate_url(self, img_url, request_id):
+        """
+        校验 URL 合法性：协议白名单 + 私有 IP 拦截
+
+        Returns:
+            (parsed, error_msg) — parsed 为 urlparse 结果，校验失败时 parsed=None
+        """
+        parsed = urlparse(img_url)
+
+        if parsed.scheme not in _ALLOWED_SCHEMES:
+            logger.warning("[%s] URL 协议不允许: %s", request_id, parsed.scheme)
+            return None, f"仅支持 http/https 协议，当前: {parsed.scheme}"
+
+        hostname = parsed.hostname
+        if not hostname:
+            logger.warning("[%s] URL 缺少主机名: %s", request_id, img_url)
+            return None, "URL 格式无效：缺少主机名"
+
+        if self._is_ssrf_ip(hostname):
+            logger.warning("[%s] URL 指向内网地址被拦截: %s", request_id, hostname)
+            return None, "不允许访问内网地址"
+
+        return parsed, None
+
+    def _validate_image(self, filepath, request_id):
+        """
+        验证下载的文件是否为有效图片
+
+        Returns:
+            bool: True 为有效图片
+        """
+        try:
+            with Image.open(filepath) as img:
+                img.verify()  # 快速校验图片头部，不解码全部数据
+            return True
+        except Exception:
+            logger.warning("[%s] 文件不是有效图片: %s", request_id, filepath)
+            return False
+
     def _download_image(self, img_url, request_id):
         """
         从 URL 下载图片到本地临时目录
+
+        安全措施：URL 协议白名单、私有 IP 拦截、连接+读取双超时、
+        流式分块写入带大小限制、下载后验证图片格式有效性。
 
         Args:
             img_url:    图片 URL
             request_id: 请求追踪 ID
 
         Returns:
-            str: 下载后的本地文件路径，失败返回 None
+            (str, str): (文件路径, None) 成功; (None, 错误原因) 失败
         """
+        filepath = None
         try:
+            # URL 安全校验
+            parsed, err = self._validate_url(img_url, request_id)
+            if parsed is None:
+                return None, err
+
             logger.info("[%s] 开始下载图片: %s", request_id, img_url)
 
             # 提取文件名
-            parsed = urlparse(img_url)
             path = unquote(parsed.path)
             filename = os.path.basename(path) if path else 'image.jpg'
-            # 确保文件名有扩展名
             if '.' not in filename:
                 filename += '.jpg'
 
-            # 流式下载，支持超时和大小限制
-            resp = http_requests.get(
+            # 流式下载：(connect_timeout, read_timeout) 双超时
+            # 使用常见浏览器 UA，避免被 CDN/对象存储拦截
+            with http_requests.get(
                 img_url,
-                timeout=self.download_timeout,
+                timeout=(self.download_timeout, self.download_timeout * 2),
                 stream=True,
-                headers={'User-Agent': 'ImageAnalyzer/1.0'},
-            )
-            resp.raise_for_status()
+                headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                                  'AppleWebKit/537.36 (KHTML, like Gecko) '
+                                  'Chrome/120.0.0.0 Safari/537.36',
+                },
+                allow_redirects=True,
+            ) as resp:
+                resp.raise_for_status()
 
-            # 检查 Content-Length（如果服务端提供）
-            content_length = resp.headers.get('Content-Length')
-            if content_length and int(content_length) > self.max_file_size:
-                logger.warning("[%s] 图片过大: %s bytes, 上限 %d",
-                               request_id, content_length, self.max_file_size)
-                resp.close()
-                return None
+                # 预检 Content-Length
+                content_length = resp.headers.get('Content-Length')
+                if content_length and int(content_length) > self.max_file_size:
+                    logger.warning("[%s] 图片过大: %s bytes, 上限 %d",
+                                   request_id, content_length, self.max_file_size)
+                    return None, f"图片过大（{int(content_length) // (1024*1024)}MB），上限 {self.max_file_size // (1024*1024)}MB"
 
-            # 写入临时文件（分块读取，边下边检查大小）
-            unique_filename = f"svc_{request_id}_{filename}"
-            filepath = os.path.join(self.upload_folder, unique_filename)
-            downloaded_size = 0
+                # 写入临时文件（分块读取，边下边检查大小）
+                unique_filename = f"svc_{request_id}_{filename}"
+                filepath = os.path.join(self.upload_folder, unique_filename)
+                downloaded_size = 0
 
-            with open(filepath, 'wb') as f:
-                for chunk in resp.iter_content(chunk_size=8192):
-                    if chunk:
-                        downloaded_size += len(chunk)
-                        if downloaded_size > self.max_file_size:
-                            logger.warning("[%s] 下载超出大小限制 %d bytes",
-                                           request_id, self.max_file_size)
-                            f.close()
-                            os.remove(filepath)
-                            return None
-                        f.write(chunk)
+                with open(filepath, 'wb') as f:
+                    for chunk in resp.iter_content(chunk_size=8192):
+                        if chunk:
+                            downloaded_size += len(chunk)
+                            if downloaded_size > self.max_file_size:
+                                logger.warning("[%s] 下载超出大小限制 %d bytes",
+                                               request_id, self.max_file_size)
+                                break
+                            f.write(chunk)
+                    else:
+                        # for 循环正常结束（未 break），下载完成
+                        pass
+
+                # 超出大小限制时清理文件并返回
+                if downloaded_size > self.max_file_size:
+                    self._safe_remove(filepath, request_id)
+                    return None, f"下载超出大小限制 {self.max_file_size // (1024*1024)}MB"
+
+            # 下载后验证文件是否为有效图片
+            if not self._validate_image(filepath, request_id):
+                self._safe_remove(filepath, request_id)
+                return None, "下载的文件不是有效图片"
 
             logger.info("[%s] 图片下载完成: %s, 大小=%d bytes",
                         request_id, filepath, downloaded_size)
-            return filepath
+            return filepath, None
 
         except http_requests.exceptions.Timeout:
             logger.warning("[%s] 图片下载超时 (%ds): %s",
                            request_id, self.download_timeout, img_url)
-            return None
+            self._safe_remove(filepath, request_id)
+            return None, f"图片下载超时（{self.download_timeout}s）"
+        except http_requests.exceptions.ConnectionError as e:
+            logger.warning("[%s] 图片下载连接失败: %s, 错误: %s",
+                           request_id, img_url, str(e))
+            self._safe_remove(filepath, request_id)
+            return None, "图片下载连接失败，请检查 URL 域名是否可访问"
+        except http_requests.exceptions.HTTPError as e:
+            status_code = e.response.status_code if e.response is not None else 'N/A'
+            logger.warning("[%s] 图片下载 HTTP 错误 %s: %s",
+                           request_id, status_code, img_url)
+            self._safe_remove(filepath, request_id)
+            return None, f"图片服务器返回 HTTP {status_code} 错误"
         except http_requests.exceptions.RequestException as e:
             logger.warning("[%s] 图片下载失败: %s, 错误: %s",
                            request_id, img_url, str(e))
-            return None
-        except Exception as e:
+            self._safe_remove(filepath, request_id)
+            return None, f"图片下载失败: {str(e)}"
+        except Exception:
             logger.exception("[%s] 图片下载发生未预期异常: %s", request_id, img_url)
-            return None
+            self._safe_remove(filepath, request_id)
+            return None, "图片下载发生未预期异常"
+
+    @staticmethod
+    def _safe_remove(filepath, request_id):
+        """安全删除文件（忽略不存在或权限错误）"""
+        if filepath:
+            try:
+                if os.path.exists(filepath):
+                    os.remove(filepath)
+            except OSError:
+                logger.debug("[%s] 临时文件清理失败: %s", request_id, filepath)
 
     def _detect_single(self, filepath, model_id, thresholds, request_id):
         """
