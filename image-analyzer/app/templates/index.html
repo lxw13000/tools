@@ -17,6 +17,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
 .nav-icon.motion{background:#eef2ff;color:#4f46e5}
 .nav-icon.nsfw{background:#fef2f2;color:#dc2626}
 .nav-icon.scheduler{background:#f0fdf4;color:#16a34a}
+.nav-icon.nsfw-svc{background:#fff3e0;color:#e65100}
 .nav-icon svg{width:28px;height:28px}
 .nav-body{flex:1;min-width:0}
 .nav-body h2{font-size:1.1em;color:#111827;margin-bottom:6px;font-weight:600}
@@ -25,6 +26,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
 .nav-tag.motion{background:#eef2ff;color:#4f46e5}
 .nav-tag.nsfw{background:#fef2f2;color:#dc2626}
 .nav-tag.scheduler{background:#f0fdf4;color:#16a34a}
+.nav-tag.nsfw-svc{background:#fff3e0;color:#e65100}
 @media(max-width:480px){
   body{padding:24px 12px}
   .nav-card{padding:20px 18px;gap:14px}
@@ -67,6 +69,16 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
       <h2>定时检测服务</h2>
       <p>定时从第三方接口拉取直播截图，自动执行动静态检测并回调结果，支持手动触发和执行可视化</p>
       <span class="nav-tag scheduler">自动化服务</span>
+    </div>
+  </a>
+  <a class="nav-card" href="/nsfw-service">
+    <div class="nav-icon nsfw-svc">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>
+    </div>
+    <div class="nav-body">
+      <h2>内容安全检测服务</h2>
+      <p>供外部业务调用的鉴黄 API 接口，接受图片 URL 自动下载检测，支持自定义模型和策略参数</p>
+      <span class="nav-tag nsfw-svc">API 服务</span>
     </div>
   </a>
 </div>

@@ -82,3 +82,10 @@ scheduler:
   image_download_timeout: 15    # 图片下载超时（秒）
   risk_mid: 0.85                # 中风险阈值（介于 dynamic 和 static 之间）
   max_history: 50               # 可视化页面保留的最近执行记录数
+
+# NSFW 检测服务配置（供外部业务调用的 API 接口）
+nsfw_service:
+  max_concurrent: 5             # 最大并发检测数（信号量限流）
+  queue_timeout: 30             # 排队等待超时（秒），超时返回 503
+  download_timeout: 15          # 图片下载超时（秒）
+  max_file_size: 52428800       # 图片最大大小 50MB（字节）

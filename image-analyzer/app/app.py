@@ -17,7 +17,7 @@ import uuid
 import logging
 import yaml
 from .logging_config import setup_logging
-from .modules import MotionDetector, NSFWDetector, FusionDetector, SchedulerService
+from .modules import MotionDetector, NSFWDetector, FusionDetector, SchedulerService, NsfwService
 
 # 动态检测允许的最大图片数量
 MAX_MOTION_IMAGES = 6
@@ -74,6 +74,13 @@ scheduler_config = config.get('scheduler', {}) if config else {}
 if scheduler_config.get('enabled', False):
     scheduler_service.start()
 
+# ---- 初始化 NSFW 检测服务（供外部业务调用）----
+nsfw_service = NsfwService(
+    nsfw_detector=nsfw_detector,
+    fusion_detector=fusion_detector,
+    config=config,
+)
+
 
 def allowed_file(filename: str) -> bool:
     """检查上传文件扩展名是否在允许列表中"""
@@ -107,6 +114,12 @@ def nsfw_page():
 def scheduler_page():
     """定时检测服务页面"""
     return render_template('scheduler.html')
+
+
+@app.route('/nsfw-service')
+def nsfw_service_page():
+    """NSFW 检测服务测试页面"""
+    return render_template('nsfw_service.html')
 
 
 # ---- API 路由 ----
@@ -374,6 +387,59 @@ def trigger_scheduler():
     """POST /api/scheduler/trigger — 手动触发一次批次执行"""
     ok, msg = scheduler_service.trigger_manual()
     return jsonify({"success": ok, "message": msg})
+
+
+# ---- NSFW 检测服务 API（供外部业务调用）----
+
+@app.route('/api/detect/nsfw/check', methods=['POST'])
+def detect_nsfw_check():
+    """
+    POST /api/detect/nsfw/check — 外部业务调用的内容安全检测接口
+
+    参数（JSON body）：
+      - imgUrl:         图片网络 URL（必填）
+      - modelStrategy:  模型参数策略（可选），格式：
+        {
+            "modelId": "falconsai",                      # 模型 ID 或 "fusion"
+            "models": ["opennsfw2", "falconsai"],        # 融合模式下参与的模型
+            "strategy": "weighted_average",               # 融合策略
+            "thresholds": { "nsfw_block": 0.8, ... }     # 阈值参数
+        }
+
+    返回：
+      - 成功: 与 /api/detect/nsfw 或 /api/detect/nsfw/fusion 一致的结果 JSON
+      - 失败: {status:'error', message, request_id}
+    """
+    try:
+        # 支持 JSON 和 form 两种提交方式
+        if request.is_json:
+            data = request.get_json(silent=True) or {}
+        else:
+            data = request.form.to_dict()
+
+        img_url = data.get('imgUrl', '').strip()
+        model_strategy = data.get('modelStrategy')
+
+        # 如果 modelStrategy 是字符串（form 提交），尝试解析为 JSON
+        if isinstance(model_strategy, str):
+            import json
+            try:
+                model_strategy = json.loads(model_strategy) if model_strategy else None
+            except (json.JSONDecodeError, ValueError):
+                return jsonify({
+                    "status": "error",
+                    "message": "modelStrategy 格式无效，请提供合法的 JSON"
+                }), 400
+
+        result, status_code = nsfw_service.check(img_url, model_strategy)
+        return jsonify(result), status_code
+
+    except Exception as e:
+        logger.exception("NSFW 检测服务接口异常")
+        return jsonify({
+            "status": "error",
+            "message": f"接口处理失败: {str(e)}"
+        }), 500
 
 
 # ---- 错误处理 ----

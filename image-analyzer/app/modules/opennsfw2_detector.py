@@ -48,6 +48,8 @@ class OpenNSFW2Detector:
                 if key in t:
                     self.thresholds[key] = float(t[key])
 
+        logger.info("OpenNSFW2Detector 初始化完成, thresholds=%s", self.thresholds)
+
     def is_available(self) -> bool:
         """检查 opennsfw2 依赖是否已安装"""
         try:
@@ -60,8 +62,10 @@ class OpenNSFW2Detector:
         """确保模型已加载（懒加载：首次调用时通过 opennsfw2 创建模型）"""
         if self._model is not None:
             return
+        logger.info("OpenNSFW2: 首次调用，开始加载模型")
         import opennsfw2 as n2
         self._model = n2.make_open_nsfw_model()
+        logger.info("OpenNSFW2: 模型加载完成")
 
     def detect(self, image_path: str, thresholds: Optional[Dict] = None) -> Dict:
         """
@@ -79,6 +83,7 @@ class OpenNSFW2Detector:
                 失败: {status:'error', message}
         """
         if not os.path.exists(image_path):
+            logger.warning("OpenNSFW2: 图片文件不存在 %s", image_path)
             return {"status": "error", "message": "图片文件不存在"}
 
         # 使用传入阈值，若未传则用配置/默认阈值
@@ -119,6 +124,10 @@ class OpenNSFW2Detector:
             else:
                 action, action_text = 'pass', '放行'
                 details = []
+
+            logger.info("OpenNSFW2: 检测完成, action=%s, nsfw=%.4f, normal=%.4f, "
+                        "image_size=%d, elapsed=%.2fs",
+                        action, nsfw_prob, normal_prob, file_size, elapsed)
 
             return {
                 'status': 'success',

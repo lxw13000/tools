@@ -105,23 +105,30 @@ class NSFWDetector:
                 if key in t:
                     self.mobilenet_thresholds[key] = float(t[key])
 
+        logger.info("NSFWDetector 初始化完成, models_dir=%s, mobilenet阈值=%s",
+                     models_dir, self.mobilenet_thresholds)
+
     # ---- 懒加载：首次使用时才初始化模型，避免启动时内存占用过高 ----
 
     def _get_opennsfw2(self):
         """获取 OpenNSFW2 检测器实例（懒加载）"""
         if self._opennsfw2 is None:
+            logger.info("OpenNSFW2: 首次调用，开始初始化检测器")
             from .opennsfw2_detector import OpenNSFW2Detector
             self._opennsfw2 = OpenNSFW2Detector(config=self.config)
+            logger.info("OpenNSFW2: 检测器实例创建完成")
         return self._opennsfw2
 
     def _get_falconsai(self):
         """获取 Falconsai ViT 检测器实例（懒加载）"""
         if self._falconsai is None:
+            logger.info("Falconsai: 首次调用，开始初始化检测器")
             from .falconsai_detector import FalconsaiDetector
             self._falconsai = FalconsaiDetector(
                 model_dir=os.path.join(self.models_dir, 'falconsai'),
                 config=self.config,
             )
+            logger.info("Falconsai: 检测器实例创建完成")
         return self._falconsai
 
     def _load_tf_model(self):
@@ -132,10 +139,12 @@ class NSFWDetector:
         path = os.path.join(self.models_dir, cfg['file'])
         if not os.path.exists(path):
             raise FileNotFoundError(f"模型文件不存在: {cfg['file']}")
+        logger.info("MobileNet: 首次调用，开始加载模型 %s", cfg['file'])
         # 加载 .h5 模型，需注册 KerasLayer 自定义对象
         self._tf_model = tf.keras.models.load_model(
             path, custom_objects={'KerasLayer': hub.KerasLayer}, compile=False
         )
+        logger.info("MobileNet: 模型加载完成")
         return self._tf_model
 
     # ---- 公开 API ----
@@ -200,9 +209,12 @@ class NSFWDetector:
                 失败: {status:'error', message}
         """
         if model_id not in MODEL_REGISTRY:
+            logger.warning("NSFWDetector: 未知模型 %s", model_id)
             return {"status": "error", "message": f"未知模型: {model_id}"}
 
         cfg = MODEL_REGISTRY[model_id]
+        logger.info("NSFWDetector: 开始检测, model=%s(%s), image=%s",
+                     model_id, cfg['name'], image_path)
 
         # 根据模型类型路由到对应的检测实现
         if cfg['type'] == 'opennsfw2':
@@ -230,6 +242,7 @@ class NSFWDetector:
             thresholds: 阈值覆盖字典 {porn, hentai, sexy, porn_hentai}
         """
         if not os.path.exists(image_path):
+            logger.warning("MobileNet: 图片文件不存在 %s", image_path)
             return {"status": "error", "message": "图片文件不存在"}
 
         # 使用传入阈值，若未传则用配置文件/默认阈值
@@ -279,6 +292,12 @@ class NSFWDetector:
 
             # ---- 阈值级联决策 ----
             action, action_text, details = self._mobilenet_decision(raw, t)
+
+            elapsed = round(time.time() - start, 2)
+            logger.info("MobileNet: 检测完成, action=%s, 色情=%.4f, 性感=%.4f, 正常=%.4f, "
+                        "image_size=%d, elapsed=%.2fs",
+                        action, safety['色情'], safety['性感'], safety['正常'],
+                        file_size, elapsed)
 
             return {
                 'status': 'success',

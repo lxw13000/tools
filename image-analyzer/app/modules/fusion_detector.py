@@ -68,6 +68,9 @@ class FusionDetector:
             if 'strategy' in fusion:
                 self.strategy = fusion['strategy']
 
+        logger.info("FusionDetector 初始化完成, weights=%s, thresholds=%s, strategy=%s",
+                     self.weights, self.thresholds, self.strategy)
+
     def detect(self, image_path: str, models: Optional[List[str]] = None,
                thresholds: Optional[Dict[str, Dict]] = None) -> Dict:
         """
@@ -88,6 +91,9 @@ class FusionDetector:
 
         if not models:
             models = ['opennsfw2', 'mobilenet', 'falconsai']
+
+        logger.info("融合检测: 开始, models=%s, strategy=%s, image=%s",
+                     models, self.strategy, image_path)
 
         # ---- 逐模型调用检测 ----
         model_results = {}       # 各模型的完整检测结果
@@ -132,6 +138,7 @@ class FusionDetector:
 
         # 所有模型均失败，无法融合
         if weight_sum == 0:
+            logger.warning("融合检测: 所有模型均检测失败, 无法融合")
             return {
                 'status': 'error',
                 'message': '没有可用的模型结果',
@@ -219,6 +226,12 @@ class FusionDetector:
             details.append(f"融合性感: {final_sexy:.2%}")
         details.append(f"综合分数: {combined_score:.2%}")
 
+        elapsed = round(time.time() - start, 2)
+        logger.info("融合检测: 完成, action=%s, strategy=%s, combined_score=%.4f, "
+                     "final_porn=%.4f, final_sexy=%s, model_scores=%s, elapsed=%.2fs",
+                     action, self.strategy, combined_score,
+                     final_porn, final_sexy, safety_scores, elapsed)
+
         return {
             'status': 'success',
             'fusion': {
@@ -234,5 +247,5 @@ class FusionDetector:
             'content_type': fused_content_type,
             'safety': fused_safety,
             'model_results': model_results,
-            'elapsed_seconds': round(time.time() - start, 2),
+            'elapsed_seconds': elapsed,
         }

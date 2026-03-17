@@ -63,6 +63,9 @@ class FalconsaiDetector:
                 if key in t:
                     self.thresholds[key] = float(t[key])
 
+        logger.info("FalconsaiDetector 初始化完成, model_dir=%s, thresholds=%s",
+                     self.model_dir, self.thresholds)
+
     def is_available(self) -> bool:
         """检查模型文件是否存在（需要 config.json + 权重文件）"""
         config_path = os.path.join(self.model_dir, 'config.json')
@@ -78,6 +81,7 @@ class FalconsaiDetector:
             return
         if not self.is_available():
             raise FileNotFoundError(f"Falconsai 模型不存在: {self.model_dir}")
+        logger.info("Falconsai: 开始加载模型 pipeline, model_dir=%s", self.model_dir)
         from transformers import pipeline, AutoModelForImageClassification, AutoImageProcessor
         # 加载模型和图像处理器（离线模式，不访问网络）
         model = AutoModelForImageClassification.from_pretrained(
@@ -93,6 +97,7 @@ class FalconsaiDetector:
             image_processor=image_processor,
             device="cpu",
         )
+        logger.info("Falconsai: 模型 pipeline 加载完成")
 
     def detect(self, image_path: str, thresholds: Optional[Dict] = None) -> Dict:
         """
@@ -110,6 +115,7 @@ class FalconsaiDetector:
                 失败: {status:'error', message}
         """
         if not os.path.exists(image_path):
+            logger.warning("Falconsai: 图片文件不存在 %s", image_path)
             return {"status": "error", "message": "图片文件不存在"}
 
         # 使用传入阈值，若未传则用配置/默认阈值
@@ -149,6 +155,10 @@ class FalconsaiDetector:
                 details = []
 
             elapsed = round(time.time() - start, 2)
+
+            logger.info("Falconsai: 检测完成, action=%s, nsfw=%.4f, normal=%.4f, "
+                        "image_size=%d, elapsed=%.2fs",
+                        action, nsfw_score, normal_score, file_size, elapsed)
 
             return {
                 'status': 'success',
