@@ -23,8 +23,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # 复制依赖清单
 COPY requirements.txt .
 
-# 安装 CPU-only PyTorch（从官方 CPU 源，体积更小）
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+# 安装 CPU-only PyTorch
+# x86_64: 从官方 CPU 源安装（体积更小）
+# arm64:  官方 CPU 源无 ARM64 wheel，退回 PyPI（Mac Apple Silicon / ARM 服务器）
+RUN arch=$(uname -m) && \
+    if [ "$arch" = "x86_64" ]; then \
+        pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu; \
+    else \
+        pip install --no-cache-dir torch; \
+    fi
 
 # 安装其余 Python 依赖（TensorFlow 等大包需要较长超时）
 RUN pip install --no-cache-dir --timeout=300 --retries=3 -r requirements.txt

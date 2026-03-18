@@ -4,6 +4,7 @@ api/logs
 !.mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/
+.spec-workflow
 
 ### IntelliJ IDEA ###
 .idea/
