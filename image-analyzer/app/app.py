@@ -205,7 +205,7 @@ def detect_motion():
 
         # 解析前端传来的可选阈值参数
         thresholds = {}
-        for key in ['static', 'dynamic']:
+        for key in ['high_risk', 'mid_risk', 'review']:
             val = request.form.get(f'threshold_{key}', type=float)
             if val is not None:
                 thresholds[key] = val

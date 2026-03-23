@@ -7,11 +7,11 @@
 status 映射:
   0=已关播  1=待检测  2=检测中  3=通过  4=疑似  5=检测失败
 
-riskLevel 映射（基于 fusion_score）:
-  < dynamic_threshold (0.75)  → low (status=3)
-  [0.75, risk_mid)            → medium (status=4)
-  [risk_mid, static_threshold)→ high (status=4)
-  >= static_threshold (0.95)  → critical (status=4)
+riskLevel 映射（基于 fusion_score 与三阈值）:
+  < review_threshold (0.75)    → low (status=3)
+  [review, mid_risk)           → medium (status=4)
+  [mid_risk, high_risk)        → high (status=4)
+  >= high_risk_threshold (0.95)→ critical (status=4)
 """
 
 import os
@@ -43,11 +43,11 @@ class SchedulerService:
         self._last_run = None
         self._current_step = ''
 
-        # 阈值
+        # 阈值（三阈值四分类，与 motion_detector 一致）
         thresholds = self.motion_config.get('thresholds', {})
-        self.dynamic_threshold = float(thresholds.get('dynamic', 0.75))
-        self.static_threshold = float(thresholds.get('static', 0.95))
-        self.risk_mid = float(self.scheduler_config.get('risk_mid', 0.85))
+        self.review_threshold = float(thresholds.get('review', 0.75))
+        self.mid_risk_threshold = float(thresholds.get('mid_risk', 0.85))
+        self.high_risk_threshold = float(thresholds.get('high_risk', 0.95))
         self.max_history = int(self.scheduler_config.get('max_history', 50))
 
         # HTTP 配置
@@ -288,11 +288,11 @@ class SchedulerService:
         """映射 status、riskLevel code 和中文标签"""
         if result == 'error':
             return 5, 'error', '检测失败'
-        if fusion_score < self.dynamic_threshold:
+        if fusion_score < self.review_threshold:
             return 3, 'low', '正常'
-        elif fusion_score < self.risk_mid:
-            return 4, 'medium', '疑似'
-        elif fusion_score < self.static_threshold:
+        elif fusion_score < self.mid_risk_threshold:
+            return 4, 'medium', '人工复核'
+        elif fusion_score < self.high_risk_threshold:
             return 4, 'high', '中风险挂播'
         else:
             return 4, 'critical', '高风险挂播'
@@ -350,9 +350,9 @@ class SchedulerService:
             'callback_path': self.callback_path,
             'timeout': self.timeout,
             'image_download_timeout': self.image_download_timeout,
-            'risk_mid': self.risk_mid,
-            'dynamic_threshold': self.dynamic_threshold,
-            'static_threshold': self.static_threshold,
+            'review_threshold': self.review_threshold,
+            'mid_risk_threshold': self.mid_risk_threshold,
+            'high_risk_threshold': self.high_risk_threshold,
             'max_history': self.max_history,
         }
 

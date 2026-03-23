@@ -2,7 +2,7 @@
 图片静态/动态检测模块
 
 核心业务：传入 1-6 张图片，通过三种方法（pHash、SSIM、光流法）综合评分，
-判断本次检测的图片序列属于静态画面、动态画面还是需要人工复核。
+判断本次检测的图片序列属于高风险挂播、中风险挂播、人工复核还是通过。
 
 三种评分方法：
   - pHash（感知哈希）：比较 64 位感知哈希的汉明距离，快速粗判
@@ -13,15 +13,16 @@
   - 各方法计算相邻帧相似度（0-1），取平均后按权重加权融合
   - 权重自动归一化，某方法失败时自动排除并重新分配
 
-判定逻辑：
+判定逻辑（三阈值四分类）：
   - 1 张图片 → 拒绝检测（至少需要 2 张）
-  - 2-6 张图片 → 计算融合评分与双阈值比较
-    - 融合评分 >= 静态阈值 → 静态
-    - 融合评分 <  动态阈值 → 动态
-    - 介于两者之间 → 人工复核
+  - 2-6 张图片 → 计算融合评分与三阈值比较
+    - 融合评分 >= 高风险阈值 → 高风险挂播
+    - 融合评分 >= 中风险阈值 → 中风险挂播
+    - 融合评分 >= 复核阈值   → 人工复核
+    - 融合评分 <  复核阈值   → 通过
 
 返回结果 status 取值：
-  - 'success' — 检测成功，result 为 'static'、'dynamic' 或 'review'
+  - 'success' — 检测成功，result 为 'high_risk'、'mid_risk'、'review' 或 'pass'
   - 'error'   — 检测失败（图片数量不合法、图片读取失败等）
 """
 
@@ -63,10 +64,11 @@ class MotionDetector:
             'ssim': float(weights.get('ssim', 0.35)),
             'flow': float(weights.get('flow', 0.25)),
         }
-        # 双阈值（静态阈值 > 动态阈值，中间区域为人工复核）
+        # 三阈值四分类（高风险 > 中风险 > 复核，低于复核阈值为通过）
         self.thresholds = {
-            'static': float(thresholds.get('static', 0.95)),
-            'dynamic': float(thresholds.get('dynamic', 0.75)),
+            'high_risk': float(thresholds.get('high_risk', 0.95)),
+            'mid_risk': float(thresholds.get('mid_risk', 0.85)),
+            'review': float(thresholds.get('review', 0.75)),
         }
 
     def detect(self, image_paths: List[str],
@@ -78,7 +80,7 @@ class MotionDetector:
         Args:
             image_paths: 图片文件路径列表（2-6 张）
             weights:     可选的权重覆盖（前端传入），如 {'phash': 0.5, 'ssim': 0.3, 'flow': 0.2}
-            thresholds:  可选的阈值覆盖（前端传入），如 {'static': 0.90, 'dynamic': 0.70}
+            thresholds:  可选的阈值覆盖（前端传入），如 {'high_risk': 0.95, 'mid_risk': 0.85, 'review': 0.70}
 
         Returns:
             dict: 检测结果
@@ -102,7 +104,7 @@ class MotionDetector:
         w = {**self.weights, **(weights or {})}
         t = {**self.thresholds, **(thresholds or {})}
 
-        result_map = {'static': '静态', 'dynamic': '动态', 'review': '人工复核'}
+        result_map = {'high_risk': '高风险挂播', 'mid_risk': '中风险挂播', 'review': '人工复核', 'pass': '通过'}
 
         # ---- 单张图片无法比较，拒绝检测 ----
         if len(image_paths) < 2:
@@ -152,16 +154,19 @@ class MotionDetector:
                 else:
                     weights_used[name] = 0.0
 
-            # ---- 三态判定 ----
-            static_th = t['static']
-            dynamic_th = t['dynamic']
+            # ---- 四态判定 ----
+            high_risk_th = t['high_risk']
+            mid_risk_th = t['mid_risk']
+            review_th = t['review']
 
-            if final_score >= static_th:
-                result = 'static'
-            elif final_score < dynamic_th:
-                result = 'dynamic'
-            else:
+            if final_score >= high_risk_th:
+                result = 'high_risk'
+            elif final_score >= mid_risk_th:
+                result = 'mid_risk'
+            elif final_score >= review_th:
                 result = 'review'
+            else:
+                result = 'pass'
 
             elapsed = round(time.time() - start_time, 2)
 
@@ -172,7 +177,7 @@ class MotionDetector:
                 "fusion_score": final_score,
                 "scores": scores_detail,
                 "weights_used": weights_used,
-                "thresholds_used": {"static": static_th, "dynamic": dynamic_th},
+                "thresholds_used": {"high_risk": high_risk_th, "mid_risk": mid_risk_th, "review": review_th},
                 "pair_details": {
                     "phash": [round(s, 4) for s in phash_sims],
                     "ssim": [round(s, 4) for s in ssim_sims],

@@ -32,11 +32,12 @@ motion_detection:
     phash: 0.40     # 感知哈希权重
     ssim: 0.35      # 结构相似度权重
     flow: 0.25      # 光流检测权重
-  # 判定阈值（融合评分与阈值比较，中间区域为人工复核）
+  # 判定阈值（三阈值四分类，从高到低依次判定）
   thresholds:
-    static: 0.95    # 融合评分 >= 此值 → 静态
-    dynamic: 0.75   # 融合评分 < 此值 → 动态
-                     # 介于两者之间 → 人工复核
+    high_risk: 0.95  # 融合评分 >= 此值 → 高风险挂播
+    mid_risk: 0.85   # 融合评分 >= 此值 → 中风险挂播
+    review: 0.75     # 融合评分 >= 此值 → 人工复核
+                     # 融合评分 < 此值 → 通过
 
 # NSFW 检测配置
 nsfw_detection:
@@ -80,7 +81,7 @@ scheduler:
     callback_path: "/sano/dyCheck/call/check"  # POST 回调检测结果
   timeout: 30                   # HTTP 请求超时（秒）
   image_download_timeout: 15    # 图片下载超时（秒）
-  risk_mid: 0.85                # 中风险阈值（介于 dynamic 和 static 之间）
+  # risk_mid 已废弃，风险阈值统一由 motion_detection.thresholds 管理
   max_history: 50               # 可视化页面保留的最近执行记录数
 
 # NSFW 检测服务配置（供外部业务调用的 API 接口）

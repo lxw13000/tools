@@ -34,9 +34,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
 .weight-total.warn{background:#fef3c7;color:#92400e}
 /* threshold zone indicator */
 .zone-bar{display:flex;height:20px;border-radius:6px;overflow:hidden;margin-top:10px;font-size:.7em;font-weight:500;color:#fff;text-align:center;line-height:20px}
-.zone-bar .z-dynamic{background:#d97706}
+.zone-bar .z-pass{background:#16a34a}
 .zone-bar .z-review{background:#eab308}
-.zone-bar .z-static{background:#16a34a}
+.zone-bar .z-mid{background:#ea580c}
+.zone-bar .z-high{background:#dc2626}
 /* upload */
 .upload-area{border:2px dashed #d1d5db;border-radius:10px;padding:36px 16px;text-align:center;cursor:pointer;transition:border-color .2s,background .2s;background:#fafafa}
 .upload-area:hover,.upload-area.dragover{border-color:#4f46e5;background:#eef2ff}
@@ -71,9 +72,10 @@ input[type="file"]{display:none}
 @keyframes fadeIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
 .result-card .rc-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
 .rc-badge{display:inline-block;padding:2px 10px;border-radius:12px;font-size:.78em;font-weight:600;color:#fff}
-.rc-badge.static{background:#16a34a}
-.rc-badge.dynamic{background:#d97706}
+.rc-badge.high_risk{background:#dc2626}
+.rc-badge.mid_risk{background:#ea580c}
 .rc-badge.review{background:#eab308;color:#422006}
+.rc-badge.pass{background:#16a34a}
 .rc-badge.error{background:#dc2626}
 .rc-time{font-size:.78em;color:#9ca3af}
 .rc-redetect{font-size:.72em;color:#6b7280;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:3px 10px;cursor:pointer;white-space:nowrap;transition:all .15s;flex-shrink:0}
@@ -139,9 +141,10 @@ input[type="file"]{display:none}
       <div class="panel-title">判定阈值配置</div>
       <div id="thresholdContent"></div>
       <div class="zone-bar" id="zoneBar">
-        <div class="z-dynamic" style="flex:75">动态 &lt;75%</div>
-        <div class="z-review" style="flex:20">复核</div>
-        <div class="z-static" style="flex:5">&ge;95%</div>
+        <div class="z-pass" style="flex:75">通过 &lt;75%</div>
+        <div class="z-review" style="flex:10">复核</div>
+        <div class="z-mid" style="flex:10">中风险</div>
+        <div class="z-high" style="flex:5">&ge;95%</div>
       </div>
       <button class="th-reset" id="thReset">恢复默认值</button>
     </div>
@@ -198,12 +201,13 @@ const WEIGHT_DEFS=[
   {key:'flow',  label:'Flow 光流检测',   def:25},
 ];
 const THRESHOLD_DEFS=[
-  {key:'static',  label:'静态阈值（>=此值为静态）', def:95},
-  {key:'dynamic', label:'动态阈值（<此值为动态）',  def:75},
+  {key:'high_risk', label:'高风险阈值（>=此值为高风险挂播）', def:95},
+  {key:'mid_risk',  label:'中风险阈值（>=此值为中风险挂播）', def:85},
+  {key:'review',    label:'复核阈值（>=此值为人工复核）',     def:75},
 ];
 
 let currentWeights={phash:40,ssim:35,flow:25};
-let currentThresholds={static:95,dynamic:75};
+let currentThresholds={high_risk:95,mid_risk:85,review:75};
 let defaultWeights={...currentWeights};
 let defaultThresholds={...currentThresholds};
 
@@ -275,14 +279,16 @@ function renderThresholds(){
 }
 
 function updateZoneBar(){
-  const s=currentThresholds.static, d=currentThresholds.dynamic;
-  const dynW=Math.max(d,1);
-  const reviewW=Math.max(s-d,0);
-  const statW=Math.max(100-s,1);
+  const h=currentThresholds.high_risk, m=currentThresholds.mid_risk, r=currentThresholds.review;
+  const passW=Math.max(r,1);
+  const reviewW=Math.max(m-r,0);
+  const midW=Math.max(h-m,0);
+  const highW=Math.max(100-h,1);
   zoneBar.innerHTML=
-    `<div class="z-dynamic" style="flex:${dynW}">动态 &lt;${d}%</div>`+
+    `<div class="z-pass" style="flex:${passW}">通过 &lt;${r}%</div>`+
     (reviewW>0?`<div class="z-review" style="flex:${reviewW}">复核</div>`:'')+
-    `<div class="z-static" style="flex:${statW}">&ge;${s}%</div>`;
+    (midW>0?`<div class="z-mid" style="flex:${midW}">中风险</div>`:'')+
+    `<div class="z-high" style="flex:${highW}">&ge;${h}%</div>`;
 }
 
 /* ---- load config from server ---- */
@@ -297,8 +303,9 @@ fetch('/api/motion/config').then(r=>r.json()).then(cfg=>{
   }
   if(cfg.thresholds){
     defaultThresholds={
-      static:Math.round(cfg.thresholds.static*100),
-      dynamic:Math.round(cfg.thresholds.dynamic*100),
+      high_risk:Math.round(cfg.thresholds.high_risk*100),
+      mid_risk:Math.round(cfg.thresholds.mid_risk*100),
+      review:Math.round(cfg.thresholds.review*100),
     };
     currentThresholds={...defaultThresholds};
   }
@@ -375,8 +382,9 @@ detectBtn.addEventListener('click',async()=>{
   fd.append('weight_flow',(currentWeights.flow/100).toFixed(2));
 
   // 追加阈值参数
-  fd.append('threshold_static',(currentThresholds.static/100).toFixed(2));
-  fd.append('threshold_dynamic',(currentThresholds.dynamic/100).toFixed(2));
+  fd.append('threshold_high_risk',(currentThresholds.high_risk/100).toFixed(2));
+  fd.append('threshold_mid_risk',(currentThresholds.mid_risk/100).toFixed(2));
+  fd.append('threshold_review',(currentThresholds.review/100).toFixed(2));
 
   const curThumbs=[...thumbs];
   try{
@@ -392,7 +400,7 @@ detectBtn.addEventListener('click',async()=>{
 });
 
 /* ---- result rendering ---- */
-const resultTextMap={static:'静态',dynamic:'动态',review:'人工复核'};
+const resultTextMap={high_risk:'高风险挂播',mid_risk:'中风险挂播',review:'人工复核',pass:'通过'};
 let pairCounter=0;
 
 function dataURLtoBlob(url){
@@ -421,8 +429,9 @@ async function redetect(btn){
   fd.append('weight_phash',(currentWeights.phash/100).toFixed(2));
   fd.append('weight_ssim',(currentWeights.ssim/100).toFixed(2));
   fd.append('weight_flow',(currentWeights.flow/100).toFixed(2));
-  fd.append('threshold_static',(currentThresholds.static/100).toFixed(2));
-  fd.append('threshold_dynamic',(currentThresholds.dynamic/100).toFixed(2));
+  fd.append('threshold_high_risk',(currentThresholds.high_risk/100).toFixed(2));
+  fd.append('threshold_mid_risk',(currentThresholds.mid_risk/100).toFixed(2));
+  fd.append('threshold_review',(currentThresholds.review/100).toFixed(2));
 
   try{
     const res=await fetch('/api/detect/motion',{method:'POST',body:fd});
@@ -494,7 +503,7 @@ function addHistory(data,previews){
   const tu=data.thresholds_used||{};
   let detailText='';
   if(wu.phash!==undefined) detailText+=`<span>权重:</span> pHash ${(wu.phash*100).toFixed(0)}% / SSIM ${(wu.ssim*100).toFixed(0)}% / Flow ${(wu.flow*100).toFixed(0)}%`;
-  if(tu.static!==undefined) detailText+=` &emsp;<span>阈值:</span> 静态>=${(tu.static*100).toFixed(0)}% / 动态<${(tu.dynamic*100).toFixed(0)}%`;
+  if(tu.high_risk!==undefined) detailText+=` &emsp;<span>阈值:</span> 高风险>=${(tu.high_risk*100).toFixed(0)}% / 中风险>=${(tu.mid_risk*100).toFixed(0)}% / 复核>=${(tu.review*100).toFixed(0)}%`;
 
   const pairId='pair_'+(pairCounter++);
   const pairHtml=buildPairDetails(data.pair_details,pairId);
