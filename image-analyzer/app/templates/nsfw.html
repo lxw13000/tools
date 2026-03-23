@@ -94,7 +94,14 @@ input[type="file"]{display:none}
 .rc-redetect:hover{color:#dc2626;border-color:#fca5a5;background:#fef2f2}
 .rc-redetect:disabled{opacity:.5;cursor:not-allowed}
 .rc-body{display:flex;gap:14px;align-items:flex-start}
-.rc-thumb{width:72px;height:72px;border-radius:8px;object-fit:cover;border:1px solid #e5e7eb;flex-shrink:0}
+.rc-thumb{width:72px;height:72px;border-radius:8px;object-fit:cover;border:1px solid #e5e7eb;flex-shrink:0;cursor:pointer;transition:transform .15s}
+.rc-thumb:hover{transform:scale(1.08)}
+/* lightbox */
+.lightbox-overlay{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.85);z-index:1000;align-items:center;justify-content:center}
+.lightbox-overlay.show{display:flex}
+.lightbox-img{max-width:90vw;max-height:85vh;border-radius:8px;object-fit:contain;user-select:none}
+.lightbox-close{position:absolute;top:16px;right:20px;background:none;border:none;color:#fff;font-size:32px;cursor:pointer;line-height:1;padding:4px 8px;opacity:.8}
+.lightbox-close:hover{opacity:1}
 .rc-scores{flex:1;min-width:0}
 /* score bars */
 .score-section{margin-bottom:10px}
@@ -626,6 +633,28 @@ function addFusionResult(data,thumb,name,clientSize){
 }
 
 document.getElementById('clearHist').addEventListener('click',()=>{histList.innerHTML='';histPanel.style.display='none'});
+</script>
+
+<!-- Lightbox -->
+<div class="lightbox-overlay" id="lightbox">
+  <button class="lightbox-close" id="lbClose">&times;</button>
+  <img class="lightbox-img" id="lbImg">
+</div>
+<script>
+(function(){
+  const overlay=document.getElementById('lightbox'),lbImg=document.getElementById('lbImg');
+
+  function show(src){lbImg.src=src;overlay.classList.add('show')}
+  function hide(){overlay.classList.remove('show')}
+
+  document.getElementById('lbClose').onclick=hide;
+  overlay.addEventListener('click',e=>{if(e.target===overlay)hide()});
+  document.addEventListener('keydown',e=>{if(e.key==='Escape'&&overlay.classList.contains('show'))hide()});
+
+  document.addEventListener('click',e=>{
+    if(e.target.matches('.rc-thumb'))show(e.target.src);
+  });
+})();
 </script>
 </body>
 </html>
