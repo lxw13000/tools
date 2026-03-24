@@ -462,13 +462,11 @@ class MotionDetector:
         grays = []
         for path in image_paths:
             try:
-                img = cv2.imread(path)
-                if img is None:
-                    logger.warning("Flow: 无法读取图片 %s", path)
-                    continue
-                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-                gray = cv2.resize(gray, (self.target_size, self.target_size))
-                grays.append(gray)
+                with Image.open(path) as img:
+                    gray = img.convert('L').resize(
+                        (self.target_size, self.target_size), Image.Resampling.BILINEAR
+                    )
+                    grays.append(np.array(gray))
             except Exception as e:
                 logger.warning("Flow: 跳过无法读取的图片 %s: %s", path, e)
                 continue
@@ -533,13 +531,12 @@ class MotionDetector:
         grays = []
         for path in image_paths:
             try:
-                img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
-                if img is None:
-                    logger.warning("CLAHE: 无法读取图片 %s", path)
-                    continue
-                img = cv2.resize(img, (self.target_size, self.target_size))
-                img = clahe.apply(img)
-                grays.append(img)
+                with Image.open(path) as img:
+                    gray = np.array(img.convert('L').resize(
+                        (self.target_size, self.target_size), Image.Resampling.BILINEAR
+                    ))
+                    gray = clahe.apply(gray)
+                    grays.append(gray)
             except Exception as e:
                 logger.warning("CLAHE: 跳过无法读取的图片 %s: %s", path, e)
                 continue
@@ -570,12 +567,11 @@ class MotionDetector:
         grays = []
         for path in image_paths:
             try:
-                img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
-                if img is None:
-                    logger.warning("PixelStatic: 无法读取图片 %s", path)
-                    continue
-                img = cv2.resize(img, (self.target_size, self.target_size))
-                grays.append(img)
+                with Image.open(path) as img:
+                    gray = np.array(img.convert('L').resize(
+                        (self.target_size, self.target_size), Image.Resampling.BILINEAR
+                    ))
+                    grays.append(gray)
             except Exception as e:
                 logger.warning("PixelStatic: 跳过无法读取的图片 %s: %s", path, e)
                 continue
