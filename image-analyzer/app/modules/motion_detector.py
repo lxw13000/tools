@@ -35,13 +35,12 @@ from typing import List, Dict, Optional
 import time
 import logging
 
+from .face_detector import FaceDetector
+
 logger = logging.getLogger(__name__)
 
 # 单次检测允许的最大图片数量（业务规则：1-6 张）
 MAX_IMAGES = 6
-
-# SSIM 和光流计算时统一缩放的目标尺寸（平衡精度与性能）
-TARGET_SIZE = (256, 256)
 
 
 class MotionDetector:
@@ -60,20 +59,44 @@ class MotionDetector:
 
         # 三种评分方法的默认权重
         self.weights = {
-            'phash': float(weights.get('phash', 0.40)),
+            'phash': float(weights.get('phash', 0.25)),
             'ssim': float(weights.get('ssim', 0.35)),
-            'flow': float(weights.get('flow', 0.25)),
+            'flow': float(weights.get('flow', 0.40)),
         }
         # 三阈值四分类（高风险 > 中风险 > 复核，低于复核阈值为通过）
         self.thresholds = {
             'high_risk': float(thresholds.get('high_risk', 0.95)),
-            'mid_risk': float(thresholds.get('mid_risk', 0.85)),
-            'review': float(thresholds.get('review', 0.75)),
+            'mid_risk': float(thresholds.get('mid_risk', 0.87)),
+            'review': float(thresholds.get('review', 0.78)),
         }
+        # 算法调优参数
+        self.target_size = int(config.get('target_size', 512))
+        self.phash_hash_size = int(config.get('phash_hash_size', 16))
+        self.min_weight = float(config.get('min_weight', 0.4))
+        self.flow_motion_threshold = float(config.get('flow_motion_threshold', 1.5))
+        self.flow_scale_factor = float(config.get('flow_scale_factor', 6.0))
+        # CLAHE 亮度归一化增强配置（高光线截图检测）
+        clahe_config = config.get('clahe_enhancement', {})
+        self.clahe_enabled = bool(clahe_config.get('enabled', True))
+        self.clahe_clip_limit = float(clahe_config.get('clip_limit', 2.0))
+        self.clahe_tile_size = int(clahe_config.get('tile_size', 8))
+        self.clahe_gap_threshold = float(clahe_config.get('gap_threshold', 0.08))
+        self.clahe_adjustment_factor = float(clahe_config.get('adjustment_factor', 1.5))
+        self.clahe_max_adjustment = float(clahe_config.get('max_adjustment', 0.25))
+        # 合成挂播检测配置（静态图+动态特效检测，像素级静态比率）
+        block_config = config.get('block_static', {})
+        self.block_static_enabled = bool(block_config.get('enabled', True))
+        self.block_pixel_diff_threshold = int(block_config.get('pixel_diff_threshold', 15))
+        self.block_min_static_ratio = float(block_config.get('min_static_ratio', 0.75))
+        self.block_static_adjustment = float(block_config.get('adjustment', 0.50))
+        # 人脸检测增强（可选）
+        face_config = config.get('face_detection', {})
+        self.face_detector = FaceDetector(config=face_config)
 
     def detect(self, image_paths: List[str],
                weights: Optional[Dict] = None,
-               thresholds: Optional[Dict] = None) -> Dict:
+               thresholds: Optional[Dict] = None,
+               face_detection_enabled: Optional[bool] = None) -> Dict:
         """
         检测图片序列是静态、动态还是需要人工复核
 
@@ -81,11 +104,13 @@ class MotionDetector:
             image_paths: 图片文件路径列表（2-6 张）
             weights:     可选的权重覆盖（前端传入），如 {'phash': 0.5, 'ssim': 0.3, 'flow': 0.2}
             thresholds:  可选的阈值覆盖（前端传入），如 {'high_risk': 0.95, 'mid_risk': 0.85, 'review': 0.70}
+            face_detection_enabled: 可选的人脸检测开关覆盖（None 表示使用配置默认值）
 
         Returns:
             dict: 检测结果
                 成功时: {status, result, result_text, fusion_score, scores, weights_used,
-                         thresholds_used, pair_details, message, elapsed_seconds}
+                         thresholds_used, pair_details, message, elapsed_seconds,
+                         [face_detection_used, face_change_score, face_details, original_fusion_score]}
                 失败时: {status:'error', message}
         """
         # ---- 参数校验 ----
@@ -120,10 +145,10 @@ class MotionDetector:
             ssim_sims = self._calc_ssim_similarities(image_paths)
             flow_sims = self._calc_flow_similarities(image_paths)
 
-            # 各方法取平均
-            phash_avg = sum(phash_sims) / len(phash_sims) if phash_sims else None
-            ssim_avg = sum(ssim_sims) / len(ssim_sims) if ssim_sims else None
-            flow_avg = sum(flow_sims) / len(flow_sims) if flow_sims else None
+            # 各方法取聚合值（min-weighted：兼顾最差对与均值）
+            phash_avg = self._aggregate_pairs(phash_sims) if phash_sims else None
+            ssim_avg = self._aggregate_pairs(ssim_sims) if ssim_sims else None
+            flow_avg = self._aggregate_pairs(flow_sims) if flow_sims else None
 
             # 权重归一化并加权融合（自动排除失败的方法）
             active_score = 0.0
@@ -168,9 +193,135 @@ class MotionDetector:
             else:
                 result = 'pass'
 
+            # ---- 人脸检测增强（可选后处理）----
+            face_result = None
+            original_score = final_score
+
+            # 确定本次请求是否启用人脸检测
+            use_face = (face_detection_enabled
+                        if face_detection_enabled is not None
+                        else self.face_detector.is_available())
+
+            if use_face and result in ('high_risk', 'mid_risk', 'review'):
+                try:
+                    face_result = self.face_detector.detect_face_changes(image_paths)
+                    if face_result.get('face_change_score', 0) > 0:
+                        adjustment = self.face_detector.compute_adjustment(
+                            face_result['face_change_score']
+                        )
+                        final_score = round(max(final_score - adjustment, 0.0), 4)
+
+                        # 以调整后评分重新分类
+                        if final_score >= high_risk_th:
+                            result = 'high_risk'
+                        elif final_score >= mid_risk_th:
+                            result = 'mid_risk'
+                        elif final_score >= review_th:
+                            result = 'review'
+                        else:
+                            result = 'pass'
+
+                        logger.info("人脸检测增强: 变化度=%.4f, 调整量=%.4f, 评分 %.4f→%.4f, 判定 %s",
+                                    face_result['face_change_score'], adjustment,
+                                    original_score, final_score, result)
+                except Exception as e:
+                    logger.warning("人脸检测增强失败，使用原始评分: %s", e)
+                    face_result = None
+
+            # ---- 合成挂播检测（人脸冻结 + 背景动态 = 疑似合成）----
+            if use_face and result == 'pass':
+                try:
+                    static_result = self.face_detector.detect_static_faces(image_paths)
+                    if static_result.get('has_static_face'):
+                        adjustment = self.face_detector.compute_static_adjustment(
+                            static_result['face_static_score']
+                        )
+                        final_score = round(min(final_score + adjustment, 1.0), 4)
+
+                        # 以调整后评分重新分类
+                        if final_score >= high_risk_th:
+                            result = 'high_risk'
+                        elif final_score >= mid_risk_th:
+                            result = 'mid_risk'
+                        elif final_score >= review_th:
+                            result = 'review'
+                        else:
+                            result = 'pass'
+
+                        face_result = static_result
+                        face_result['composite_detected'] = True
+                        logger.info("合成挂播检测: 人脸冻结度=%.4f, 调整量=+%.4f, 评分 %.4f→%.4f, 判定 %s",
+                                    static_result['face_static_score'], adjustment,
+                                    original_score, final_score, result)
+                except Exception as e:
+                    logger.warning("合成挂播检测失败: %s", e)
+
+            # ---- CLAHE 亮度归一化重评估（高光线截图检测）----
+            clahe_result = None
+            if self.clahe_enabled and result == 'pass':
+                try:
+                    clahe_ssims = self._calc_clahe_ssim_similarities(image_paths)
+                    if clahe_ssims and ssim_sims:
+                        clahe_avg = self._aggregate_pairs(clahe_ssims)
+                        ssim_orig_avg = self._aggregate_pairs(ssim_sims)
+                        gap = clahe_avg - ssim_orig_avg
+                        if gap > self.clahe_gap_threshold:
+                            adjustment = min(gap * self.clahe_adjustment_factor,
+                                             self.clahe_max_adjustment)
+                            final_score = round(min(final_score + adjustment, 1.0), 4)
+
+                            if final_score >= high_risk_th:
+                                result = 'high_risk'
+                            elif final_score >= mid_risk_th:
+                                result = 'mid_risk'
+                            elif final_score >= review_th:
+                                result = 'review'
+                            else:
+                                result = 'pass'
+
+                            clahe_result = {
+                                'clahe_gap': round(gap, 4),
+                                'clahe_ssim_avg': round(clahe_avg, 4),
+                                'adjustment': round(adjustment, 4),
+                            }
+                            logger.info("CLAHE增强: gap=%.4f, 调整量=+%.4f, 评分 %.4f→%.4f, 判定 %s",
+                                        gap, adjustment, original_score, final_score, result)
+                except Exception as e:
+                    logger.warning("CLAHE增强失败: %s", e)
+
+            # ---- 分块静态比率检测（静态图+动态特效检测）----
+            block_result = None
+            if self.block_static_enabled and result == 'pass':
+                try:
+                    block_ratios = self._calc_block_static_ratio(image_paths)
+                    if block_ratios:
+                        min_ratio = min(block_ratios)
+                        if min_ratio > self.block_min_static_ratio:
+                            adjustment = min_ratio * self.block_static_adjustment
+                            final_score = round(min(final_score + adjustment, 1.0), 4)
+
+                            if final_score >= high_risk_th:
+                                result = 'high_risk'
+                            elif final_score >= mid_risk_th:
+                                result = 'mid_risk'
+                            elif final_score >= review_th:
+                                result = 'review'
+                            else:
+                                result = 'pass'
+
+                            block_result = {
+                                'min_static_ratio': round(min_ratio, 4),
+                                'pair_ratios': [round(r, 4) for r in block_ratios],
+                                'adjustment': round(adjustment, 4),
+                            }
+                            logger.info("分块静态检测: min_ratio=%.4f, 调整量=+%.4f, 评分 %.4f→%.4f, 判定 %s",
+                                        min_ratio, adjustment, original_score, final_score, result)
+                except Exception as e:
+                    logger.warning("分块静态检测失败: %s", e)
+
             elapsed = round(time.time() - start_time, 2)
 
-            return {
+            result_dict = {
                 "status": "success",
                 "result": result,
                 "result_text": result_map[result],
@@ -186,6 +337,34 @@ class MotionDetector:
                 "message": f"融合评分: {final_score:.2%}, 判定: {result_map[result]}",
                 "elapsed_seconds": elapsed,
             }
+
+            # 人脸检测信息仅在实际使用时附加（向后兼容）
+            if face_result is not None:
+                result_dict["face_detection_used"] = True
+                result_dict["face_details"] = face_result.get("pair_details", [])
+                result_dict["face_counts"] = face_result.get("face_counts", [])
+                result_dict["original_fusion_score"] = original_score
+                if face_result.get('composite_detected'):
+                    # 合成挂播检测结果
+                    result_dict["composite_detected"] = True
+                    result_dict["face_static_score"] = face_result.get("face_static_score", 0.0)
+                else:
+                    # 常规人脸变化检测结果
+                    result_dict["face_change_score"] = face_result.get("face_change_score", 0.0)
+
+            # CLAHE 增强信息仅在触发时附加
+            if clahe_result is not None:
+                result_dict["clahe_enhanced"] = True
+                result_dict["clahe_gap"] = clahe_result['clahe_gap']
+                result_dict["original_fusion_score"] = result_dict.get("original_fusion_score", original_score)
+
+            # 分块静态检测信息仅在触发时附加
+            if block_result is not None:
+                result_dict["block_static_detected"] = True
+                result_dict["block_static_ratio"] = block_result['min_static_ratio']
+                result_dict["original_fusion_score"] = result_dict.get("original_fusion_score", original_score)
+
+            return result_dict
 
         except Exception as e:
             logger.exception("动态检测失败")
@@ -210,7 +389,7 @@ class MotionDetector:
         for path in image_paths:
             try:
                 with Image.open(path) as img:
-                    img_hash = imagehash.phash(img)
+                    img_hash = imagehash.phash(img, hash_size=self.phash_hash_size)
                     hashes.append(img_hash)
             except Exception as e:
                 logger.warning("pHash: 跳过无法读取的图片 %s: %s", path, e)
@@ -220,9 +399,10 @@ class MotionDetector:
             return []
 
         similarities = []
+        max_distance = float(self.phash_hash_size ** 2)
         for i in range(len(hashes) - 1):
             hash_diff = hashes[i] - hashes[i + 1]
-            similarity = 1.0 - (hash_diff / 64.0)
+            similarity = 1.0 - (hash_diff / max_distance)
             similarities.append(similarity)
 
         return similarities
@@ -246,7 +426,7 @@ class MotionDetector:
         for path in image_paths:
             try:
                 with Image.open(path) as img:
-                    gray = img.convert('L').resize(TARGET_SIZE, Image.Resampling.BILINEAR)
+                    gray = img.convert('L').resize((self.target_size, self.target_size), Image.Resampling.BILINEAR)
                     grays.append(np.array(gray))
             except Exception as e:
                 logger.warning("SSIM: 跳过无法读取的图片 %s: %s", path, e)
@@ -287,7 +467,7 @@ class MotionDetector:
                     logger.warning("Flow: 无法读取图片 %s", path)
                     continue
                 gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-                gray = cv2.resize(gray, TARGET_SIZE)
+                gray = cv2.resize(gray, (self.target_size, self.target_size))
                 grays.append(gray)
             except Exception as e:
                 logger.warning("Flow: 跳过无法读取的图片 %s: %s", path, e)
@@ -303,8 +483,111 @@ class MotionDetector:
                 None, 0.5, 3, 15, 3, 5, 1.2, 0
             )
             magnitude = np.sqrt(flow[..., 0] ** 2 + flow[..., 1] ** 2)
-            mean_mag = float(np.mean(magnitude))
-            similarity = 1.0 / (1.0 + mean_mag)
+            # 运动像素占比（替代旧版 mean_magnitude，不被静态背景稀释）
+            motion_mask = magnitude > self.flow_motion_threshold
+            motion_ratio = float(np.sum(motion_mask)) / float(magnitude.size)
+            similarity = max(1.0 - motion_ratio * self.flow_scale_factor, 0.0)
             similarities.append(similarity)
 
         return similarities
+
+    # ---- 辅助方法：逐对相似度聚合 ----
+
+    def _aggregate_pairs(self, similarities: List[float]) -> float:
+        """
+        聚合逐对相似度分数
+
+        使用最小值权重策略：min_weight * min(pairs) + (1 - min_weight) * avg(pairs)，
+        确保单对运动信号不被 N-1 对静态分数淹没。
+
+        min_weight=0.0 时退化为纯平均（向后兼容）。
+        """
+        if not similarities:
+            return 0.0
+        avg = sum(similarities) / len(similarities)
+        if self.min_weight <= 0.0 or len(similarities) == 1:
+            return avg
+        min_val = min(similarities)
+        return self.min_weight * min_val + (1.0 - self.min_weight) * avg
+
+    # ---- 增强方法 1: CLAHE 亮度归一化 SSIM（高光线截图检测）----
+
+    def _calc_clahe_ssim_similarities(self, image_paths: List[str]) -> List[float]:
+        """
+        CLAHE 亮度归一化后计算 SSIM
+
+        对图片做自适应直方图均衡化（CLAHE）后再计算 SSIM，
+        消除高光/反光/亮度波动的影响。若 CLAHE 后 SSIM 显著高于
+        原始 SSIM，说明原始差异主要来自亮度而非内容变化。
+
+        Args:
+            image_paths: 图片路径列表
+
+        Returns:
+            CLAHE 处理后的 SSIM 相似度列表；有效图片 < 2 张时返回空列表
+        """
+        clahe = cv2.createCLAHE(
+            clipLimit=self.clahe_clip_limit,
+            tileGridSize=(self.clahe_tile_size, self.clahe_tile_size),
+        )
+        grays = []
+        for path in image_paths:
+            try:
+                img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+                if img is None:
+                    logger.warning("CLAHE: 无法读取图片 %s", path)
+                    continue
+                img = cv2.resize(img, (self.target_size, self.target_size))
+                img = clahe.apply(img)
+                grays.append(img)
+            except Exception as e:
+                logger.warning("CLAHE: 跳过无法读取的图片 %s: %s", path, e)
+                continue
+
+        if len(grays) < 2:
+            return []
+
+        return [float(compare_ssim(grays[i], grays[i + 1]))
+                for i in range(len(grays) - 1)]
+
+    # ---- 增强方法 2: 像素级静态比率检测（静态图+动态特效检测）----
+
+    def _calc_block_static_ratio(self, image_paths: List[str]) -> List[float]:
+        """
+        计算像素级静态比率
+
+        逐对比较相邻帧的灰度像素差值，统计差值低于阈值的"静态像素"占比。
+        静态图片+动态特效合成的特征：底层大部分像素不变（差值极小），
+        仅特效覆盖区域有像素变化。像素级检测不受特效大小影响，
+        比分块 SSIM 更精准。
+
+        Args:
+            image_paths: 图片路径列表
+
+        Returns:
+            每对相邻图片的静态像素占比列表（0-1）；有效图片 < 2 张时返回空列表
+        """
+        grays = []
+        for path in image_paths:
+            try:
+                img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+                if img is None:
+                    logger.warning("PixelStatic: 无法读取图片 %s", path)
+                    continue
+                img = cv2.resize(img, (self.target_size, self.target_size))
+                grays.append(img)
+            except Exception as e:
+                logger.warning("PixelStatic: 跳过无法读取的图片 %s: %s", path, e)
+                continue
+
+        if len(grays) < 2:
+            return []
+
+        ratios = []
+        for i in range(len(grays) - 1):
+            diff = np.abs(grays[i].astype(np.int16) - grays[i + 1].astype(np.int16))
+            static_pixels = int(np.sum(diff < self.block_pixel_diff_threshold))
+            ratio = static_pixels / diff.size
+            ratios.append(ratio)
+
+        return ratios

@@ -8,7 +8,7 @@ status 映射:
   0=已关播  1=待检测  2=检测中  3=通过  4=疑似  5=检测失败
 
 riskLevel 映射（基于 fusion_score 与三阈值）:
-  < review_threshold (0.75)    → low (status=3)
+  < review_threshold (0.78)    → low (status=3)
   [review, mid_risk)           → medium (status=4)
   [mid_risk, high_risk)        → high (status=4)
   >= high_risk_threshold (0.95)→ critical (status=4)
@@ -45,8 +45,8 @@ class SchedulerService:
 
         # 阈值（三阈值四分类，与 motion_detector 一致）
         thresholds = self.motion_config.get('thresholds', {})
-        self.review_threshold = float(thresholds.get('review', 0.75))
-        self.mid_risk_threshold = float(thresholds.get('mid_risk', 0.85))
+        self.review_threshold = float(thresholds.get('review', 0.78))
+        self.mid_risk_threshold = float(thresholds.get('mid_risk', 0.87))
         self.high_risk_threshold = float(thresholds.get('high_risk', 0.95))
         self.max_history = int(self.scheduler_config.get('max_history', 50))
 
@@ -214,6 +214,18 @@ class SchedulerService:
                 'phashScore': round(scores.get('phash', 0), 4),
             }
 
+            # 附加人脸检测分数（仅在启用时存在）
+            if detect_result.get('face_detection_used'):
+                record['scores']['originalZombieScore'] = round(
+                    detect_result.get('original_fusion_score', fusion_score), 4)
+                if detect_result.get('composite_detected'):
+                    record['scores']['faceStaticScore'] = round(
+                        detect_result.get('face_static_score', 0), 4)
+                    record['scores']['compositeDetected'] = True
+                else:
+                    record['scores']['faceScore'] = round(
+                        detect_result.get('face_change_score', 0), 4)
+
             status, risk_code, risk_label = self._map_risk(fusion_score, result_label)
             record['status'] = status
             record['riskLevel'] = risk_code
@@ -310,6 +322,16 @@ class SchedulerService:
             'riskLevel': record['riskLevel'],
             'checkEndTime': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         }
+
+        # 人脸检测分数（仅在启用时附加）
+        scores = record.get('scores', {})
+        if 'originalZombieScore' in scores:
+            payload['originalZombieScore'] = scores['originalZombieScore']
+        if 'faceScore' in scores:
+            payload['faceScore'] = scores['faceScore']
+        if scores.get('compositeDetected'):
+            payload['faceStaticScore'] = scores.get('faceStaticScore', 0)
+            payload['compositeDetected'] = True
 
         step(f"  回调: POST {callback_url}, payload={payload}")
         try:

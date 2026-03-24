@@ -11,6 +11,9 @@ numpy>=1.24.3,<2.0
 imagehash==4.3.1
 scikit-image>=0.21.0
 
+# ===== 人脸检测（可选，用于动态检测增强）=====
+mediapipe>=0.10.0
+
 # ===== MobileNet V2 (GantMan 5-class) =====
 tensorflow==2.15.0
 tensorflow-hub==0.16.1

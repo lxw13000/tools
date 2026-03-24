@@ -151,6 +151,10 @@ def get_motion_config():
     return jsonify({
         "weights": motion_detector.weights,
         "thresholds": motion_detector.thresholds,
+        "face_detection": {
+            "enabled": motion_detector.face_detector.enabled,
+            "available": motion_detector.face_detector.is_available(),
+        },
     })
 
 
@@ -210,11 +214,18 @@ def detect_motion():
             if val is not None:
                 thresholds[key] = val
 
+        # 解析前端传来的可选人脸检测开关（per-request 覆盖）
+        face_override = None
+        face_param = request.form.get('face_detection')
+        if face_param is not None:
+            face_override = face_param.lower() in ('true', '1', 'yes')
+
         # 调用动态检测器
         return jsonify(motion_detector.detect(
             saved_paths,
             weights=weights if weights else None,
             thresholds=thresholds if thresholds else None,
+            face_detection_enabled=face_override,
         ))
 
     except Exception as e:

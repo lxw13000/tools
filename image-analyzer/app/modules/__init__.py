@@ -1,6 +1,7 @@
 """模块初始化文件"""
 
 from .motion_detector import MotionDetector
+from .face_detector import FaceDetector
 from .nsfw_detector import NSFWDetector
 from .opennsfw2_detector import OpenNSFW2Detector
 from .falconsai_detector import FalconsaiDetector
@@ -10,6 +11,7 @@ from .nsfw_service import NsfwService
 
 __all__ = [
     'MotionDetector',
+    'FaceDetector',
     'NSFWDetector',
     'OpenNSFW2Detector',
     'FalconsaiDetector',

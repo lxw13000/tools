@@ -28,16 +28,49 @@ upload:
 # 动态检测配置
 motion_detection:
   # 三种评分方法的权重（加权融合，自动归一化）
+  # 光流法是最直接的运动检测手段，给予最高权重；
+  # pHash 为全局粗判兜底，权重最低（直播画面大面积静态背景会拉高 pHash/SSIM 评分）
   weights:
-    phash: 0.40     # 感知哈希权重
-    ssim: 0.35      # 结构相似度权重
-    flow: 0.25      # 光流检测权重
+    phash: 0.25     # 感知哈希权重（全局粗判兜底）
+    ssim: 0.35      # 结构相似度权重（局部结构变化敏感）
+    flow: 0.40      # 光流检测权重（最直接的运动度量，主力）
   # 判定阈值（三阈值四分类，从高到低依次判定）
+  # 高风险要求精确：>=0.95 意味着三种方法一致认为画面几乎完全相同
   thresholds:
-    high_risk: 0.95  # 融合评分 >= 此值 → 高风险挂播
-    mid_risk: 0.85   # 融合评分 >= 此值 → 中风险挂播
-    review: 0.75     # 融合评分 >= 此值 → 人工复核
+    high_risk: 0.95  # 融合评分 >= 此值 → 高风险挂播（确定挂播，精确优先）
+    mid_risk: 0.87   # 融合评分 >= 此值 → 中风险挂播（很可能挂播）
+    review: 0.78     # 融合评分 >= 此值 → 人工复核（疑似，需人工确认）
                      # 融合评分 < 此值 → 通过
+  # 算法调优参数
+  target_size: 512            # SSIM / 光流缩放目标尺寸（越大越精确但越慢）
+  phash_hash_size: 16         # pHash 哈希边长（16→256bit，精细判别）
+  min_weight: 0.4             # 逐对聚合：最小值权重（0.4=40% 最差对 + 60% 均值，确保单对运动不被淹没）
+  flow_motion_threshold: 1.5  # 光流法：像素运动幅值 > 此值视为"运动像素"（JPEG 噪声通常 < 1.0，1.5 有余量）
+  flow_scale_factor: 6.0      # 光流法：运动像素占比的缩放因子（~17% 运动像素 → 相似度 0）
+  # CLAHE 亮度归一化增强（高光线截图检测）
+  clahe_enhancement:
+    enabled: true
+    clip_limit: 2.0            # CLAHE 对比度限制参数
+    tile_size: 8               # CLAHE 分块大小
+    gap_threshold: 0.08        # CLAHE后SSIM与原始SSIM的差值 > 此值才触发（说明差异主要来自亮度）
+    adjustment_factor: 1.5     # 差值 * 此因子 = 上调量
+    max_adjustment: 0.25       # 最大上调幅度
+  # 合成挂播检测增强（静态图+动态特效，像素级静态比率）
+  block_static:
+    enabled: true
+    pixel_diff_threshold: 15   # 像素差值 < 此值（0-255灰度）视为"静态像素"
+    min_static_ratio: 0.75     # 静态像素占比 > 此值触发上调（75%像素不变，区分合成图与微动真实直播）
+    adjustment: 0.50           # 上调幅度 = static_ratio * 此值
+  # 人脸检测增强（启用以支持合成挂播检测）
+  face_detection:
+    enabled: true               # 启用人脸变化检测增强（合成挂播检测依赖此功能）
+    max_adjustment: 0.15        # 人脸变化可下调的最大评分幅度（0.15 = 最多降 15%）
+    min_confidence: 0.5         # MediaPipe 人脸检测置信度阈值
+    position_threshold: 0.05    # 人脸中心偏移 > 此值（占图片比例）视为位置变化
+    size_threshold: 0.15        # 人脸面积变化 > 此值（相对比例）视为大小变化
+    # 合成挂播检测（静态人脸 + 动态特效）
+    static_face_ssim: 0.98      # 人脸区域 SSIM > 此值视为"像素级冻结"
+    static_face_adjustment: 0.30  # 检测到合成挂播时的最大评分上调幅度
 
 # NSFW 检测配置
 nsfw_detection:

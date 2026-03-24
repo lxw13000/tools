@@ -154,12 +154,23 @@ input[type="file"]{display:none}
       <div class="panel-title">判定阈值配置</div>
       <div id="thresholdContent"></div>
       <div class="zone-bar" id="zoneBar">
-        <div class="z-pass" style="flex:75">通过 &lt;75%</div>
-        <div class="z-review" style="flex:10">复核</div>
-        <div class="z-mid" style="flex:10">中风险</div>
+        <div class="z-pass" style="flex:78">通过 &lt;78%</div>
+        <div class="z-review" style="flex:9">复核</div>
+        <div class="z-mid" style="flex:8">中风险</div>
         <div class="z-high" style="flex:5">&ge;95%</div>
       </div>
       <button class="th-reset" id="thReset">恢复默认值</button>
+    </div>
+    <!-- Panel 3: Face Detection Toggle -->
+    <div class="panel" id="facePanel">
+      <div class="panel-title">人脸检测增强</div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:.84em;color:#374151;cursor:pointer">
+        <input type="checkbox" id="faceToggle">
+        <span>启用人脸变化检测</span>
+      </label>
+      <p style="font-size:.76em;color:#9ca3af;margin-top:6px">
+        对高/中风险及复核结果，额外检测人脸位置、数量、大小变化，辅助判断画面是否动态
+      </p>
     </div>
   </div>
 
@@ -209,18 +220,18 @@ let files=[],thumbs=[];
 
 /* ---- weight & threshold definitions ---- */
 const WEIGHT_DEFS=[
-  {key:'phash', label:'pHash 感知哈希', def:40},
+  {key:'phash', label:'pHash 感知哈希', def:25},
   {key:'ssim',  label:'SSIM 结构相似度', def:35},
-  {key:'flow',  label:'Flow 光流检测',   def:25},
+  {key:'flow',  label:'Flow 光流检测',   def:40},
 ];
 const THRESHOLD_DEFS=[
   {key:'high_risk', label:'高风险阈值（>=此值为高风险挂播）', def:95},
-  {key:'mid_risk',  label:'中风险阈值（>=此值为中风险挂播）', def:85},
-  {key:'review',    label:'复核阈值（>=此值为人工复核）',     def:75},
+  {key:'mid_risk',  label:'中风险阈值（>=此值为中风险挂播）', def:87},
+  {key:'review',    label:'复核阈值（>=此值为人工复核）',     def:78},
 ];
 
-let currentWeights={phash:40,ssim:35,flow:25};
-let currentThresholds={high_risk:95,mid_risk:85,review:75};
+let currentWeights={phash:25,ssim:35,flow:40};
+let currentThresholds={high_risk:95,mid_risk:87,review:78};
 let defaultWeights={...currentWeights};
 let defaultThresholds={...currentThresholds};
 
@@ -322,6 +333,10 @@ fetch('/api/motion/config').then(r=>r.json()).then(cfg=>{
     };
     currentThresholds={...defaultThresholds};
   }
+  if(cfg.face_detection&&cfg.face_detection.available){
+    document.getElementById('facePanel').style.display='';
+    document.getElementById('faceToggle').checked=cfg.face_detection.enabled;
+  }
   renderWeights();
   renderThresholds();
 }).catch(()=>{
@@ -399,6 +414,10 @@ detectBtn.addEventListener('click',async()=>{
   fd.append('threshold_mid_risk',(currentThresholds.mid_risk/100).toFixed(2));
   fd.append('threshold_review',(currentThresholds.review/100).toFixed(2));
 
+  // 追加人脸检测开关
+  const faceToggle=document.getElementById('faceToggle');
+  if(faceToggle) fd.append('face_detection',faceToggle.checked?'true':'false');
+
   const curThumbs=[...thumbs];
   try{
     const res=await fetch('/api/detect/motion',{method:'POST',body:fd});
@@ -445,6 +464,9 @@ async function redetect(btn){
   fd.append('threshold_high_risk',(currentThresholds.high_risk/100).toFixed(2));
   fd.append('threshold_mid_risk',(currentThresholds.mid_risk/100).toFixed(2));
   fd.append('threshold_review',(currentThresholds.review/100).toFixed(2));
+
+  const faceToggleRe=document.getElementById('faceToggle');
+  if(faceToggleRe) fd.append('face_detection',faceToggleRe.checked?'true':'false');
 
   try{
     const res=await fetch('/api/detect/motion',{method:'POST',body:fd});
@@ -511,6 +533,36 @@ function addHistory(data,previews){
   // 融合评分
   let fusionBar=buildScoreBar('融合',data.fusion_score,'sf-fusion');
 
+  // 人脸检测增强信息
+  let faceHtml='';
+  if(data.face_detection_used){
+    const origS=(data.original_fusion_score*100).toFixed(2);
+    const adjS=(data.fusion_score*100).toFixed(2);
+    if(data.composite_detected){
+      // 合成挂播检测
+      const staticS=(data.face_static_score*100).toFixed(2);
+      faceHtml=`<div class="score-section">
+        <div class="score-section-title" style="color:#dc2626">疑似合成挂播（人脸冻结+背景动态）</div>
+        ${buildScoreBar('人脸冻结度',data.face_static_score,'sf-phash')}
+        <div style="font-size:.76em;color:#9ca3af;margin-top:2px">
+          原始融合评分: ${origS}% &rarr; 上调后: ${adjS}%
+          &emsp;人脸数量: ${(data.face_counts||[]).join(' / ')}
+        </div>
+      </div>`;
+    }else{
+      // 常规人脸变化检测
+      const fcs=((data.face_change_score||0)*100).toFixed(2);
+      faceHtml=`<div class="score-section">
+        <div class="score-section-title">人脸检测增强</div>
+        ${buildScoreBar('人脸变化度',data.face_change_score||0,'sf-flow')}
+        <div style="font-size:.76em;color:#9ca3af;margin-top:2px">
+          原始融合评分: ${origS}% &rarr; 调整后: ${adjS}%
+          &emsp;人脸数量: ${(data.face_counts||[]).join(' / ')}
+        </div>
+      </div>`;
+    }
+  }
+
   // 权重和阈值信息
   const wu=data.weights_used||{};
   const tu=data.thresholds_used||{};
@@ -539,6 +591,7 @@ function addHistory(data,previews){
         <div class="score-section-title">融合评分</div>
         ${fusionBar}
       </div>
+      ${faceHtml}
     </div>
     ${detailText?'<div class="rc-detail">'+detailText+'</div>':''}
     ${pairHtml}
