@@ -54,6 +54,8 @@ class NsfwService:
         self.queue_timeout = int(svc_config.get('queue_timeout', 30))
         self.download_timeout = int(svc_config.get('download_timeout', 15))
         self.max_file_size = int(svc_config.get('max_file_size', 52428800))  # 50MB
+        # 默认模型 ID：请求未传 modelStrategy 或缺 modelId 时的兜底（见 _parse_strategy）
+        self.default_model_id = svc_config.get('default_model_id', 'falconsai')
 
         # 临时文件存放目录
         self.upload_folder = self.config.get('upload', {}).get('folder', '/tmp/uploads')
@@ -63,9 +65,9 @@ class NsfwService:
         self._semaphore = threading.Semaphore(self.max_concurrent)
 
         logger.info(
-            "NsfwService 初始化完成, max_concurrent=%d, queue_timeout=%ds, "
-            "download_timeout=%ds, max_file_size=%dMB",
-            self.max_concurrent, self.queue_timeout,
+            "NsfwService 初始化完成, default_model_id=%s, max_concurrent=%d, "
+            "queue_timeout=%ds, download_timeout=%ds, max_file_size=%dMB",
+            self.default_model_id, self.max_concurrent, self.queue_timeout,
             self.download_timeout, self.max_file_size // (1024 * 1024),
         )
 
@@ -99,7 +101,7 @@ class NsfwService:
 
         img_url = img_url.strip()
 
-        # 解析模型策略（为空则默认 Falconsai ViT）
+        # 解析模型策略（为空则使用 default_model_id 配置项）
         model_id, models, strategy, thresholds = self._parse_strategy(
             model_strategy, request_id
         )
@@ -186,10 +188,11 @@ class NsfwService:
             (model_id, models, strategy, thresholds) 四元组
         """
         if not model_strategy or not isinstance(model_strategy, dict):
-            logger.info("[%s] 未提供模型策略，使用默认 Falconsai ViT", request_id)
-            return 'falconsai', None, None, None
+            logger.info("[%s] 未提供模型策略，使用默认模型: %s",
+                        request_id, self.default_model_id)
+            return self.default_model_id, None, None, None
 
-        model_id = model_strategy.get('modelId', 'falconsai')
+        model_id = model_strategy.get('modelId', self.default_model_id)
         models = model_strategy.get('models')
         strategy = model_strategy.get('strategy')
         thresholds = model_strategy.get('thresholds')

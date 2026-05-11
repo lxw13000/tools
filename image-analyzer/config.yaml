@@ -119,6 +119,14 @@ scheduler:
 
 # NSFW 检测服务配置（供外部业务调用的 API 接口）
 nsfw_service:
+  # 默认模型 ID：当 API 请求未传入 modelStrategy，或传入的 modelStrategy 中缺少 modelId 字段时，
+  # 使用该模型作为兜底。对应代码：app/modules/nsfw_service.py 的 _parse_strategy()
+  # 可选值：
+  #   - falconsai   Falconsai ViT 单模型（推荐，准确率最高）
+  #   - opennsfw2   OpenNSFW2 (Yahoo) 单模型
+  #   - mobilenet   MobileNet V2 140 (5 分类) 单模型
+  #   - fusion      多模型融合检测（综合 falconsai + opennsfw2 + mobilenet，最稳健但最慢）
+  default_model_id: "falconsai"
   max_concurrent: 5             # 最大并发检测数（信号量限流）
   queue_timeout: 30             # 排队等待超时（秒），超时返回 503
   download_timeout: 15          # 图片下载超时（秒）
