@@ -36,10 +36,11 @@ MODEL_REGISTRY = {
     'opennsfw2': {
         'name': 'OpenNSFW2 (Yahoo)',
         'type': 'opennsfw2',
+        'file': 'open_nsfw_weights.h5',
         'accuracy': '较高',
         'speed': '快',
         'size': '~23MB',
-        'desc': 'Yahoo OpenNSFW ResNet-50，二分类，自动下载',
+        'desc': 'Yahoo OpenNSFW ResNet-50，二分类',
         'output': 'binary',
     },
     'mobilenet': {
@@ -109,7 +110,12 @@ class NSFWDetector:
             if self._opennsfw2 is None:
                 logger.info("OpenNSFW2: 首次调用，初始化检测器")
                 from .opennsfw2_detector import OpenNSFW2Detector
-                self._opennsfw2 = OpenNSFW2Detector(config=self.config)
+                weights_path = os.path.join(
+                    self.models_dir, MODEL_REGISTRY['opennsfw2']['file']
+                )
+                self._opennsfw2 = OpenNSFW2Detector(
+                    weights_path=weights_path, config=self.config,
+                )
         return self._opennsfw2
 
     def _get_falconsai(self):
@@ -168,8 +174,14 @@ class NSFWDetector:
             return False
         try:
             if cfg['type'] == 'opennsfw2':
-                import opennsfw2
-                return True
+                try:
+                    import opennsfw2  # noqa: F401
+                except ImportError:
+                    return False
+                from .opennsfw2_detector import OpenNSFW2Detector
+                return OpenNSFW2Detector.check_files(
+                    os.path.join(self.models_dir, cfg['file'])
+                )
             elif cfg['type'] == 'falconsai':
                 # 仅检查文件存在性，不触发完整初始化
                 from .falconsai_detector import FalconsaiDetector

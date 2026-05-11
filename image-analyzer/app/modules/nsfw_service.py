@@ -57,6 +57,15 @@ class NsfwService:
         # 默认模型 ID：请求未传 modelStrategy 或缺 modelId 时的兜底（见 _parse_strategy）
         self.default_model_id = svc_config.get('default_model_id', 'falconsai')
 
+        # SSRF 白名单网段：列在此处的内网/回环段例外放行（见 _is_ssrf_ip）
+        # 解析失败的条目记 warning 后跳过，不阻断启动
+        self.allowed_internal_nets = []
+        for net_str in svc_config.get('allowed_internal_nets', []) or []:
+            try:
+                self.allowed_internal_nets.append(ipaddress.ip_network(net_str, strict=False))
+            except (ValueError, TypeError) as e:
+                logger.warning("allowed_internal_nets 配置项无效 '%s': %s", net_str, e)
+
         # 临时文件存放目录
         self.upload_folder = self.config.get('upload', {}).get('folder', '/tmp/uploads')
         os.makedirs(self.upload_folder, exist_ok=True)
@@ -66,9 +75,11 @@ class NsfwService:
 
         logger.info(
             "NsfwService 初始化完成, default_model_id=%s, max_concurrent=%d, "
-            "queue_timeout=%ds, download_timeout=%ds, max_file_size=%dMB",
+            "queue_timeout=%ds, download_timeout=%ds, max_file_size=%dMB, "
+            "allowed_internal_nets=%s",
             self.default_model_id, self.max_concurrent, self.queue_timeout,
             self.download_timeout, self.max_file_size // (1024 * 1024),
+            [str(n) for n in self.allowed_internal_nets] or '无',
         )
 
     def check(self, img_url, model_strategy=None):
@@ -216,25 +227,32 @@ class NsfwService:
     ]
 
     @classmethod
-    def _is_ssrf_ip(cls, hostname):
+    def _is_ssrf_ip(cls, hostname, allowed_nets=None):
         """
         检查主机名是否解析到内网/回环地址（防止 SSRF 攻击）
 
         仅拦截 RFC 1918 内网段、回环地址、链路本地地址。
         不使用 Python ipaddress.is_private（会误判 198.18.0.0/15 等 CDN 常用段）。
         DNS 解析失败不拦截，交给后续 HTTP 请求自然报错。
+
+        Args:
+            hostname:     URL 中的主机名
+            allowed_nets: 业务方配置的白名单网段列表（ip_network 对象），
+                          IP 命中黑名单时若同时命中白名单则放行
         """
+        allowed = allowed_nets or []
         try:
             addr_info = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
             if not addr_info:
                 return False
-            # 只要有任一 IP 不在拦截列表就放行
+            # 任一 IP 在白名单或不在黑名单 → 放行整个主机名
             for family, _, _, _, sockaddr in addr_info:
                 ip = ipaddress.ip_address(sockaddr[0])
                 in_blocked = any(ip in net for net in cls._SSRF_BLOCKED_NETS)
-                if not in_blocked:
-                    return False  # 存在非内网 IP，放行
-            # 所有解析结果均为内网地址
+                in_allowed = any(ip in net for net in allowed)
+                if in_allowed or not in_blocked:
+                    return False
+            # 所有解析结果均为内网地址且不在白名单
             return True
         except (socket.gaierror, ValueError):
             return False
@@ -257,7 +275,7 @@ class NsfwService:
             logger.warning("[%s] URL 缺少主机名: %s", request_id, img_url)
             return None, "URL 格式无效：缺少主机名"
 
-        if self._is_ssrf_ip(hostname):
+        if self._is_ssrf_ip(hostname, self.allowed_internal_nets):
             logger.warning("[%s] URL 指向内网地址被拦截: %s", request_id, hostname)
             return None, "不允许访问内网地址"
 

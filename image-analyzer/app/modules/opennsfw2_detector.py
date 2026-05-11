@@ -23,7 +23,9 @@ logger = logging.getLogger(__name__)
 class OpenNSFW2Detector:
     """OpenNSFW2 (Yahoo) 二分类 NSFW 检测器"""
 
-    def __init__(self, config: Dict = None):
+    def __init__(self, weights_path: str = '/app/models/open_nsfw_weights.h5',
+                 config: Dict = None):
+        self.weights_path = weights_path
         self._model = None          # 模型懒加载
         self._load_failed = False   # 熔断标记
         self._lock = threading.Lock()
@@ -39,30 +41,45 @@ class OpenNSFW2Detector:
                 if key in t:
                     self.thresholds[key] = float(t[key])
 
-        logger.info("OpenNSFW2Detector 初始化完成")
+        logger.info("OpenNSFW2Detector 初始化完成, weights_path=%s", self.weights_path)
+
+    @staticmethod
+    def check_files(weights_path: str) -> bool:
+        """静态方法：检查权重文件是否存在（不触发实例化）"""
+        return os.path.isfile(weights_path)
 
     def is_available(self) -> bool:
-        """检查 opennsfw2 依赖是否已安装"""
+        """检查 opennsfw2 依赖与权重文件是否就绪"""
         try:
-            import opennsfw2
-            return True
+            import opennsfw2  # noqa: F401
         except ImportError:
             return False
+        return self.check_files(self.weights_path)
 
     def _ensure_loaded(self):
-        """确保模型已加载（线程安全，含熔断保护）"""
+        """确保模型已加载（线程安全，含熔断保护）
+
+        权重文件不存在时直接熔断，绝不联网下载。
+        opennsfw2 库默认在文件缺失时会从 GitHub 下载，此处通过显式传 weights_path
+        并提前校验文件存在性，规避离线/受限网络环境下的下载失败。
+        """
         if self._model is not None:
             return
         if self._load_failed:
-            raise RuntimeError("OpenNSFW2 模型加载曾失败，已熔断，请检查依赖后重启服务")
+            raise RuntimeError("OpenNSFW2 模型加载曾失败，已熔断，请检查依赖与权重文件后重启服务")
 
         with self._lock:
             if self._model is not None:
                 return
             try:
-                logger.info("OpenNSFW2: 开始加载模型")
+                if not os.path.isfile(self.weights_path):
+                    raise FileNotFoundError(
+                        f"OpenNSFW2 权重文件不存在: {self.weights_path}，"
+                        f"请下载 open_nsfw_weights.h5 至该路径"
+                    )
+                logger.info("OpenNSFW2: 开始加载模型, weights=%s", self.weights_path)
                 import opennsfw2 as n2
-                self._model = n2.make_open_nsfw_model()
+                self._model = n2.make_open_nsfw_model(weights_path=self.weights_path)
                 logger.info("OpenNSFW2: 模型加载完成")
             except Exception:
                 self._load_failed = True

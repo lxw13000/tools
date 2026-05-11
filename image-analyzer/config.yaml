@@ -126,8 +126,14 @@ nsfw_service:
   #   - opennsfw2   OpenNSFW2 (Yahoo) 单模型
   #   - mobilenet   MobileNet V2 140 (5 分类) 单模型
   #   - fusion      多模型融合检测（综合 falconsai + opennsfw2 + mobilenet，最稳健但最慢）
-  default_model_id: "falconsai"
+  default_model_id: "opennsfw2"
   max_concurrent: 5             # 最大并发检测数（信号量限流）
   queue_timeout: 30             # 排队等待超时（秒），超时返回 503
   download_timeout: 15          # 图片下载超时（秒）
   max_file_size: 52428800       # 图片最大大小 50MB（字节）
+  # SSRF 白名单网段：默认拦截所有内网/回环地址，列在此处的网段例外放行
+  # 对应代码：app/modules/nsfw_service.py 的 _is_ssrf_ip()
+  # 仅当业务方的图床/对象存储位于内网时填写，留空保持严格拦截
+  # 支持 CIDR 写法，可写单 IP（host 段用 /32）或子网段
+  allowed_internal_nets:
+    - "172.31.0.0/16"   # 业务图床所在内网段
