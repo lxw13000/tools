@@ -127,7 +127,7 @@ class NsfwService:
         img_url = img_url.strip()
 
         # 解析模型策略（为空则使用 default_model_id 配置项）
-        model_id, models, strategy, thresholds = self._parse_strategy(
+        model_id, models, strategy, thresholds, fusion_thresholds = self._parse_strategy(
             model_strategy, request_id
         )
 
@@ -175,7 +175,8 @@ class NsfwService:
             detect_start = time.perf_counter()
             if model_id == 'fusion':
                 result = self._detect_fusion(
-                    filepath, models, thresholds, request_id
+                    filepath, models, thresholds, request_id,
+                    strategy=strategy, fusion_thresholds=fusion_thresholds,
                 )
             else:
                 result = self._detect_single(
@@ -243,22 +244,36 @@ class NsfwService:
         """
         解析模型参数策略
 
+        支持的 modelStrategy 字段（融合模式专用字段仅在 modelId='fusion' 时生效）：
+            modelId             模型 ID 或 'fusion'
+            models              融合模式下参与的模型列表
+            thresholds          单模型阈值（或按模型 ID 分发的字典）
+            strategy            融合决策策略 'only_one' | 'many'（仅融合模式）
+            fusionThresholds    融合综合分阈值 {'block': float, 'review': float}（仅融合模式）
+            fusion_thresholds   兼容 snake_case 写法
+
         Returns:
-            (model_id, models, strategy, thresholds) 四元组
+            (model_id, models, strategy, thresholds, fusion_thresholds) 五元组
         """
         if not model_strategy or not isinstance(model_strategy, dict):
             logger.info("[%s] 未提供模型策略，使用默认模型: %s",
                         request_id, self.default_model_id)
-            return self.default_model_id, None, None, None
+            return self.default_model_id, None, None, None, None
 
         model_id = model_strategy.get('modelId', self.default_model_id)
         models = model_strategy.get('models')
         strategy = model_strategy.get('strategy')
         thresholds = model_strategy.get('thresholds')
+        # 兼容 camelCase 和 snake_case 两种写法
+        fusion_thresholds = (
+            model_strategy.get('fusionThresholds')
+            or model_strategy.get('fusion_thresholds')
+        )
 
-        logger.info("[%s] 解析策略: modelId=%s, models=%s, strategy=%s",
-                    request_id, model_id, models, strategy)
-        return model_id, models, strategy, thresholds
+        logger.info("[%s] 解析策略: modelId=%s, models=%s, strategy=%s, "
+                    "fusion_thresholds=%s",
+                    request_id, model_id, models, strategy, fusion_thresholds)
+        return model_id, models, strategy, thresholds, fusion_thresholds
 
     @staticmethod
     def _is_ip_allowed(hostname, allowed_nets):
@@ -475,22 +490,29 @@ class NsfwService:
                 "model_id": model_id,
             }
 
-    def _detect_fusion(self, filepath, models, thresholds, request_id):
+    def _detect_fusion(self, filepath, models, thresholds, request_id,
+                       strategy=None, fusion_thresholds=None):
         """
         多模型融合检测
 
         Args:
-            filepath:   本地图片路径
-            models:     参与融合的模型 ID 列表
-            thresholds: 按模型 ID 分组的阈值字典
-            request_id: 请求追踪 ID
+            filepath:           本地图片路径
+            models:             参与融合的模型 ID 列表
+            thresholds:         按模型 ID 分组的阈值字典（影响单模型独立判定）
+            request_id:         请求追踪 ID
+            strategy:           融合决策策略覆盖 'only_one' | 'many'（默认沿用配置）
+            fusion_thresholds:  融合综合分阈值覆盖 {'block', 'review'}（默认沿用配置）
         """
         try:
-            logger.info("[%s] 执行融合检测: models=%s", request_id, models)
+            logger.info("[%s] 执行融合检测: models=%s, strategy=%s, "
+                        "fusion_thresholds=%s",
+                        request_id, models, strategy, fusion_thresholds)
             result = self.fusion_detector.detect(
                 filepath,
                 models=models,
                 thresholds=thresholds,
+                strategy=strategy,
+                fusion_thresholds=fusion_thresholds,
             )
             return result
         except Exception as e:

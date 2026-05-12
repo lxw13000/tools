@@ -100,9 +100,12 @@ nsfw_detection:
       mobilenet: 0.30   # MobileNet V2 140 权重
       falconsai: 0.45   # Falconsai ViT 权重（最准确，权重最高）
     thresholds:
-      block: 0.85        # 融合分数 >= 此值 → 拦截
-      review: 0.7       # 融合分数 >= 此值 → 复审
-    strategy: "weighted_average"  # weighted_average | any_block | majority
+      block: 0.85        # 融合分数 >= 此值 → 拦截（仅 many 策略使用）
+      review: 0.7       # 融合分数 >= 此值 → 复审（仅 many 策略使用）
+    # 决策策略：
+    #   many     — 加权计算 combined_score 后按 fusion.thresholds 判定（默认推荐）
+    #   only_one — 任一模型独立判定即触发对应档位（block > review > pass）
+    strategy: "many"
 
 # 定时检测服务配置
 scheduler:

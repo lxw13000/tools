@@ -10,10 +10,9 @@
   3. 计算综合不安全分数 = final_porn + final_sexy（性感参与阈值评判）
   4. 根据决策策略和阈值，输出最终 action
 
-支持三种决策策略：
-  - weighted_average（默认，保守）：综合分数超阈值 OR 任一模型拦截 → 拦截
-  - any_block：任一模型拦截 → 拦截
-  - majority：多数模型投票决定
+支持两种决策策略：
+  - many（默认）：每个模型按 weights 加权计算 combined_score，按 fusion.thresholds 判定
+  - only_one：任一模型独立判定满足自身阈值即触发对应档位（block > review > pass）
 
 判定结果（action）：
   - 'block'  — 拦截
@@ -27,6 +26,20 @@ import logging
 from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+# 合法策略
+_VALID_STRATEGIES = {'only_one', 'many'}
+
+
+def _normalize_strategy(s, where=''):
+    """校验策略名；非法值回退到 many 并 warning。"""
+    if not s:
+        return 'many'
+    if s in _VALID_STRATEGIES:
+        return s
+    logger.warning("FusionDetector: %s 收到未知策略 '%s'，回退到 'many'", where, s)
+    return 'many'
+
 
 
 class FusionDetector:
@@ -53,43 +66,44 @@ class FusionDetector:
             'block': 0.7,   # 综合分数 >= 此值 → 拦截
             'review': 0.4,  # 综合分数 >= 此值 → 复审
         }
-        # 决策策略
-        self.strategy = 'weighted_average'
-
-        # 合法策略列表
-        _valid_strategies = {'weighted_average', 'any_block', 'majority'}
+        # 决策策略（only_one / many）
+        self.strategy = 'many'
 
         # 从配置文件覆盖默认值
         if config and 'nsfw_detection' in config:
             fusion = config['nsfw_detection'].get('fusion', {})
-            for k, v in fusion.get('weights', {}).items():
+            for k, v in (fusion.get('weights') or {}).items():
                 if k in self.weights:
                     self.weights[k] = float(v)
-            for k, v in fusion.get('thresholds', {}).items():
+            for k, v in (fusion.get('thresholds') or {}).items():
                 if k in self.thresholds:
                     self.thresholds[k] = float(v)
             if 'strategy' in fusion:
-                s = fusion['strategy']
-                if s in _valid_strategies:
-                    self.strategy = s
-                else:
-                    logger.warning("FusionDetector: 无效策略 '%s', 使用默认 weighted_average", s)
+                self.strategy = _normalize_strategy(
+                    fusion['strategy'], where='config.yaml',
+                )
 
         logger.info("FusionDetector 初始化完成, strategy=%s", self.strategy)
 
     def detect(self, image_path: str, models: Optional[List[str]] = None,
-               thresholds: Optional[Dict[str, Dict]] = None) -> Dict:
+               thresholds: Optional[Dict[str, Dict]] = None,
+               strategy: Optional[str] = None,
+               fusion_thresholds: Optional[Dict] = None) -> Dict:
         """
         融合多模型检测结果
 
         Args:
-            image_path: 图片文件绝对路径
-            models:     参与融合的模型 ID 列表，默认全部 ['opennsfw2', 'mobilenet', 'falconsai']
-            thresholds: 按模型 ID 分发的阈值字典，如 {'mobilenet': {...}, 'opennsfw2': {...}}
+            image_path:        图片文件绝对路径
+            models:            参与融合的模型 ID 列表，默认全部 ['opennsfw2', 'mobilenet', 'falconsai']
+            thresholds:        按模型 ID 分发的阈值字典（影响单模型独立判定），
+                               如 {'mobilenet': {...}, 'opennsfw2': {...}}
+            strategy:          本次请求覆盖的融合策略 'only_one' | 'many'（默认沿用实例配置）
+            fusion_thresholds: 本次请求覆盖的融合阈值 {'block': float, 'review': float}（默认沿用实例配置）
 
         Returns:
             dict: 融合检测结果
-                成功: {status:'success', fusion{final_score, final_porn, final_sexy, action, ...},
+                成功: {status:'success', fusion{final_score, final_porn, final_sexy, action,
+                       strategy, fusion_thresholds, ...},
                        safety{色情,正常[,性感]}, content_type, model_results, elapsed_seconds}
                 失败: {status:'error', message, model_results, elapsed_seconds}
         """
@@ -98,8 +112,18 @@ class FusionDetector:
         if not models:
             models = ['opennsfw2', 'mobilenet', 'falconsai']
 
-        logger.info("融合检测: 开始, models=%s, strategy=%s, image=%s",
-                     models, self.strategy, image_path)
+        # 单次请求可覆盖策略和融合阈值（用于 A/B 测试或临时调参）
+        effective_strategy = _normalize_strategy(
+            strategy or self.strategy, where='request',
+        )
+        effective_thresholds = dict(self.thresholds)
+        if fusion_thresholds:
+            for k, v in fusion_thresholds.items():
+                if k in effective_thresholds and v is not None:
+                    effective_thresholds[k] = float(v)
+
+        logger.info("融合检测: 开始, models=%s, strategy=%s, fusion_thresholds=%s, image=%s",
+                     models, effective_strategy, effective_thresholds, image_path)
 
         # ---- 逐模型调用检测 ----
         model_results = {}       # 各模型的完整检测结果
@@ -186,49 +210,25 @@ class FusionDetector:
             fused_safety['性感'] = final_sexy
 
         # ---- 决策策略 ----
-        block_th = self.thresholds['block']
-        review_th = self.thresholds['review']
+        block_th = effective_thresholds['block']
+        review_th = effective_thresholds['review']
 
-        if self.strategy == 'any_block':
-            # any_block 策略：任一模型拦截 → 拦截，否则用综合分数判定
-            any_block = any(
-                r.get('action') == 'block'
-                for r in model_results.values()
-                if r.get('status') == 'success'
-            )
-            if any_block:
-                action = 'block'
-            elif combined_score >= review_th:
-                action = 'review'
-            else:
-                action = 'pass'
-
-        elif self.strategy == 'majority':
-            # majority 策略：多数模型投票决定
+        if effective_strategy == 'only_one':
+            # only_one：任一模型独立判定为对应档位即触发（block > review > pass）
             actions = [
                 r.get('action')
                 for r in model_results.values()
                 if r.get('status') == 'success'
             ]
-            block_count = actions.count('block')
-            review_count = actions.count('review')
-            total = len(actions)
-            if block_count > total / 2:
+            if 'block' in actions:
                 action = 'block'
-            elif (block_count + review_count) > total / 2:
+            elif 'review' in actions:
                 action = 'review'
             else:
                 action = 'pass'
-
         else:
-            # weighted_average 策略（默认，保守）：
-            # 综合分数超阈值 OR 任一模型拦截 → 拦截
-            any_block = any(
-                r.get('action') == 'block'
-                for r in model_results.values()
-                if r.get('status') == 'success'
-            )
-            if any_block or combined_score >= block_th:
+            # many（默认）：纯加权综合分判定，不依赖单模型独立 action
+            if combined_score >= block_th:
                 action = 'block'
             elif combined_score >= review_th:
                 action = 'review'
@@ -243,14 +243,18 @@ class FusionDetector:
         if has_sexy and final_sexy > 0:
             details.append(f"融合性感: {final_sexy:.2%}")
         details.append(f"综合分数: {combined_score:.2%}")
+        details.append(
+            f"策略: {effective_strategy} "
+            f"(block≥{block_th:.2%} / review≥{review_th:.2%})"
+        )
 
         elapsed_seconds_raw = time.perf_counter() - start
         elapsed = round(elapsed_seconds_raw, 2)
         elapsed_ms = int(round(elapsed_seconds_raw * 1000))
-        logger.info("融合检测: 完成, action=%s, strategy=%s, combined_score=%.4f, "
-                     "final_porn=%.4f, final_sexy=%s, model_scores=%s, "
-                     "per_model_ms=%s, elapsed=%dms (%.2fs)",
-                     action, self.strategy, combined_score,
+        logger.info("融合检测: 完成, action=%s, strategy=%s, fusion_thresholds=%s, "
+                     "combined_score=%.4f, final_porn=%.4f, final_sexy=%s, "
+                     "model_scores=%s, per_model_ms=%s, elapsed=%dms (%.2fs)",
+                     action, effective_strategy, effective_thresholds, combined_score,
                      final_porn, final_sexy, safety_scores,
                      per_model_ms, elapsed_ms, elapsed)
 
@@ -262,7 +266,8 @@ class FusionDetector:
                 'final_sexy': final_sexy,       # 融合性感分数（无模型支持时为 None）
                 'action': action,
                 'action_text': action_text[action],
-                'strategy': self.strategy,
+                'strategy': effective_strategy,
+                'fusion_thresholds': effective_thresholds,
                 'model_scores': safety_scores,
                 'details': details,
             },

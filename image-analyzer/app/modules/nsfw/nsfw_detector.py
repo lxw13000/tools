@@ -87,7 +87,7 @@ def _read_fusion_defaults(config: Dict) -> Dict:
     """从 config 解析融合默认权重 / 阈值 / 策略"""
     weights = {'opennsfw2': 0.25, 'mobilenet': 0.30, 'falconsai': 0.45}
     thresholds = {'block': 0.7, 'review': 0.4}
-    strategy = 'weighted_average'
+    strategy = 'many'
     if config and 'nsfw_detection' in config:
         fusion = config['nsfw_detection'].get('fusion', {})
         for k, v in (fusion.get('weights') or {}).items():

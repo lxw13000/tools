@@ -123,7 +123,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
     <div class="panel">
       <div class="panel-title">模型参数策略</div>
       <div class="info-banner">
-        <strong>说明：</strong>为空时默认使用 Falconsai ViT 模型的默认参数。<code>modelId</code> 设为 <code>"fusion"</code> 启用多模型融合检测。
+        <strong>说明：</strong>为空时默认使用 Falconsai ViT 模型的默认参数。<code>modelId</code> 设为 <code>"fusion"</code> 启用多模型融合检测，可通过 <code>strategy</code> 切换策略（<code>many</code> 加权综合分判定 / <code>only_one</code> 任一模型命中即触发），<code>fusionThresholds</code> 可临时覆盖融合阈值。
       </div>
       <div class="tpl-grid">
         <button class="tpl-btn active" data-tpl="default" title="Falconsai ViT 默认参数">Falconsai 默认</button>
@@ -186,7 +186,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
     fusion: JSON.stringify({
       "modelId": "fusion",
       "models": ["opennsfw2", "mobilenet", "falconsai"],
-      "strategy": "weighted_average",
+      "strategy": "many",
+      "fusionThresholds": {
+        "block": 0.85,
+        "review": 0.7
+      },
       "thresholds": {
         "mobilenet": {
           "porn": 0.6,

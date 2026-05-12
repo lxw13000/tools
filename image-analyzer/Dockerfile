@@ -52,8 +52,17 @@ USER appuser
 
 EXPOSE 5000
 
-# 健康检查
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+# 容器健康检查
+# 参数说明：
+#   --interval=300s     探测间隔（每 5 分钟探测 1 次）
+#                       注意：每次探测都会在 gunicorn access log 中留下一行
+#                       /api/health 记录，调大间隔可显著减少日志噪音。
+#   --timeout=10s       单次探测超时上限，超过即视为本次失败
+#   --start-period=60s  容器启动初期的宽限时间，期间失败不计入 retries
+#                       （应用模型为懒加载，60s 足够 gunicorn + Flask 起来）
+#   --retries=3         连续 3 次失败才标记容器为 unhealthy
+#                       探测命令：curl 失败（非 2xx/超时/连接拒绝）即返回非 0
+HEALTHCHECK --interval=300s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:5000/api/health || exit 1
 
 # 使用 gunicorn 运行（生产环境）
