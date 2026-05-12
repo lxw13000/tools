@@ -84,10 +84,11 @@ def _read_binary_default_thresholds(config: Dict, model_key: str) -> Dict:
 
 
 def _read_fusion_defaults(config: Dict) -> Dict:
-    """从 config 解析融合默认权重 / 阈值 / 策略"""
+    """从 config 解析融合默认权重 / 阈值 / 策略 / 性感系数"""
     weights = {'opennsfw2': 0.25, 'mobilenet': 0.30, 'falconsai': 0.45}
     thresholds = {'block': 0.7, 'review': 0.4}
     strategy = 'many'
+    sexy_weight = 0.5
     if config and 'nsfw_detection' in config:
         fusion = config['nsfw_detection'].get('fusion', {})
         for k, v in (fusion.get('weights') or {}).items():
@@ -98,7 +99,19 @@ def _read_fusion_defaults(config: Dict) -> Dict:
                 thresholds[k] = float(v)
         if 'strategy' in fusion:
             strategy = fusion['strategy']
-    return {'weights': weights, 'thresholds': thresholds, 'strategy': strategy}
+        if 'sexy_weight' in fusion:
+            try:
+                sw = float(fusion['sexy_weight'])
+                if 0.0 <= sw <= 1.0:
+                    sexy_weight = sw
+            except (TypeError, ValueError):
+                pass
+    return {
+        'weights': weights,
+        'thresholds': thresholds,
+        'strategy': strategy,
+        'sexy_weight': sexy_weight,
+    }
 
 
 class NSFWDetector:

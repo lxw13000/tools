@@ -7,7 +7,8 @@
 融合流程：
   1. 依次调用所选模型的 detect()，收集每个模型的色情和性感分数
   2. 按模型权重加权平均，得到融合色情分数(final_porn)和融合性感分数(final_sexy)
-  3. 计算综合不安全分数 = final_porn + final_sexy（性感参与阈值评判）
+  3. 综合不安全分 combined_score = min(1.0, final_porn + 0.5 × final_sexy)
+     色情为主指标直接计入，性感按 0.5 系数叠加，clamp 到 1.0
   4. 根据决策策略和阈值，输出最终 action
 
 支持两种决策策略：
@@ -29,6 +30,15 @@ logger = logging.getLogger(__name__)
 
 # 合法策略
 _VALID_STRATEGIES = {'only_one', 'many'}
+
+# 性感分在综合不安全分中的权重系数默认值（可被 config 覆盖）：
+#   combined_score = min(1.0, final_porn + sexy_weight * final_sexy)
+# 取 0.5 的依据：
+#   - 色情是主指标，性感单独存在不足以认定违规（写真、健身、比基尼）
+#   - 但性感与色情叠加时风险放大（高色情 + 中性感 = 高度可疑），应能触发档位
+#   - 0 系数会丢失性感维度（纯性感图漏过），1.0 会让综合分溢出 100%
+#   - 0.5 在双中等（porn≈0.5, sexy≈0.5）场景能产出 ~0.75 综合分，恰好进入复核档
+_DEFAULT_SEXY_FUSION_WEIGHT = 0.5
 
 
 def _normalize_strategy(s, where=''):
@@ -68,6 +78,8 @@ class FusionDetector:
         }
         # 决策策略（only_one / many）
         self.strategy = 'many'
+        # 性感融合权重（影响 combined_score 计算）
+        self.sexy_weight = _DEFAULT_SEXY_FUSION_WEIGHT
 
         # 从配置文件覆盖默认值
         if config and 'nsfw_detection' in config:
@@ -78,12 +90,25 @@ class FusionDetector:
             for k, v in (fusion.get('thresholds') or {}).items():
                 if k in self.thresholds:
                     self.thresholds[k] = float(v)
+            if 'sexy_weight' in fusion:
+                try:
+                    sw = float(fusion['sexy_weight'])
+                except (TypeError, ValueError):
+                    logger.warning("FusionDetector: sexy_weight 非数值 %r，使用默认值 %.2f",
+                                   fusion['sexy_weight'], _DEFAULT_SEXY_FUSION_WEIGHT)
+                else:
+                    if 0.0 <= sw <= 1.0:
+                        self.sexy_weight = sw
+                    else:
+                        logger.warning("FusionDetector: sexy_weight %s 越界 [0.0, 1.0]，使用默认值 %.2f",
+                                       sw, _DEFAULT_SEXY_FUSION_WEIGHT)
             if 'strategy' in fusion:
                 self.strategy = _normalize_strategy(
                     fusion['strategy'], where='config.yaml',
                 )
 
-        logger.info("FusionDetector 初始化完成, strategy=%s", self.strategy)
+        logger.info("FusionDetector 初始化完成, strategy=%s, sexy_weight=%.2f",
+                    self.strategy, self.sexy_weight)
 
     def detect(self, image_path: str, models: Optional[List[str]] = None,
                thresholds: Optional[Dict[str, Dict]] = None,
@@ -197,14 +222,21 @@ class FusionDetector:
         has_sexy = sexy_weight_sum > 0
         final_sexy = round(weighted_sexy_sum / sexy_weight_sum, 4) if has_sexy else None
 
-        # 综合不安全分数 = 色情 + 性感（性感参与阈值评判）
+        # ---- 计算综合不安全分数 ----
+        # 设计目标：单维度高分必须触发，双维度中等也应触发，结果始终在 [0, 1] 内
+        # 公式：combined_score = min(1.0, final_porn + sexy_weight * final_sexy)
+        #   - 色情为主指标，直接计入
+        #   - 性感按 sexy_weight 系数叠加（性感本身 ≠ 色情，但叠加色情时风险放大）
+        #     默认 0.5，可通过 config['nsfw_detection']['fusion']['sexy_weight'] 调整
+        #   - 二分类模型不返回性感，final_sexy 为 None 时按 0 处理
+        #   - clamp 到 1.0，防止双高分溢出（旧公式 porn+sexy 可达 200%，失去阈值意义）
         sexy_value = final_sexy if final_sexy is not None else 0.0
-        combined_score = round(final_porn + sexy_value, 4)
+        combined_score = round(min(1.0, final_porn + self.sexy_weight * sexy_value), 4)
 
-        # 融合安全分类输出（仅包含模型实际支持的分类，避免理解偏差）
+        # 融合安全分类（对外展示的核心结果）
         fused_safety = {
             '色情': final_porn,
-            '正常': round(max(0, 1.0 - combined_score), 4),
+            '正常': round(max(0.0, 1.0 - combined_score), 4),
         }
         if has_sexy:
             fused_safety['性感'] = final_sexy

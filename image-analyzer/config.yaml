@@ -102,6 +102,17 @@ nsfw_detection:
     thresholds:
       block: 0.85        # 融合分数 >= 此值 → 拦截（仅 many 策略使用）
       review: 0.7       # 融合分数 >= 此值 → 复审（仅 many 策略使用）
+    # 性感分在综合不安全分中的权重系数（范围 0.0 ~ 1.0，越界回退默认值 0.5）
+    #   combined_score = min(1.0, final_porn + sexy_weight × final_sexy)
+    # 选值参考：
+    #   0.0  完全忽略性感，仅按色情判定（最宽松，比基尼/写真不会触发）
+    #   0.3  弱叠加（保守，主要看色情，性感仅作小幅修正）
+    #   0.5  折中（默认推荐）：色情主导，双维度中等也能进入复核
+    #   0.8  强叠加（严格，纯性感图也可能进入复核）
+    #   1.0  等权（最严格，纯性感高分可能触发 block）
+    # 二分类模型（OpenNSFW2 / Falconsai）不输出性感分类，本系数仅影响
+    # MobileNet 提供性感分时的最终融合结果
+    sexy_weight: 0.5
     # 决策策略：
     #   many     — 加权计算 combined_score 后按 fusion.thresholds 判定（默认推荐）
     #   only_one — 任一模型独立判定即触发对应档位（block > review > pass）
@@ -129,7 +140,7 @@ nsfw_service:
   #   - opennsfw2   OpenNSFW2 (Yahoo) 单模型
   #   - mobilenet   MobileNet V2 140 (5 分类) 单模型
   #   - fusion      多模型融合检测（综合 falconsai + opennsfw2 + mobilenet，最稳健但最慢）
-  default_model_id: "opennsfw2"
+  default_model_id: "fusion"
   max_concurrent: 20             # 最大并发检测数（信号量限流）
   queue_timeout: 10             # 排队等待超时（秒），超时返回 503
   download_timeout: 3          # 图片下载超时（秒）
@@ -144,3 +155,4 @@ nsfw_service:
   #   - "203.0.113.5/32"    # 单 IP
   ip_whitelist:
     - "172.31.0.0/16"   # 业务图床所在内网段
+    - "file.fofunlive.net"
