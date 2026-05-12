@@ -124,6 +124,8 @@ class MotionDetector:
             }
 
         start_time = time.time()
+        overall_start = time.perf_counter()
+        stage_ms = {}   # 各阶段毫秒耗时统计，用于日志和返回
 
         # 合并权重和阈值（前端覆盖 > 实例默认值）
         w = {**self.weights, **(weights or {})}
@@ -141,9 +143,17 @@ class MotionDetector:
         # ---- 多张图片：三维融合评分 ----
         try:
             # 计算各方法的相邻帧相似度
+            _t = time.perf_counter()
             phash_sims = self._calc_phash_similarities(image_paths)
+            stage_ms['phash'] = int(round((time.perf_counter() - _t) * 1000))
+
+            _t = time.perf_counter()
             ssim_sims = self._calc_ssim_similarities(image_paths)
+            stage_ms['ssim'] = int(round((time.perf_counter() - _t) * 1000))
+
+            _t = time.perf_counter()
             flow_sims = self._calc_flow_similarities(image_paths)
+            stage_ms['flow'] = int(round((time.perf_counter() - _t) * 1000))
 
             # 各方法取聚合值（min-weighted：兼顾最差对与均值）
             phash_avg = self._aggregate_pairs(phash_sims) if phash_sims else None
@@ -204,7 +214,9 @@ class MotionDetector:
 
             if use_face and result in ('high_risk', 'mid_risk', 'review'):
                 try:
+                    _t = time.perf_counter()
                     face_result = self.face_detector.detect_face_changes(image_paths)
+                    stage_ms['face_change'] = int(round((time.perf_counter() - _t) * 1000))
                     if face_result.get('face_change_score', 0) > 0:
                         adjustment = self.face_detector.compute_adjustment(
                             face_result['face_change_score']
@@ -231,7 +243,9 @@ class MotionDetector:
             # ---- 合成挂播检测（人脸冻结 + 背景动态 = 疑似合成）----
             if use_face and result == 'pass':
                 try:
+                    _t = time.perf_counter()
                     static_result = self.face_detector.detect_static_faces(image_paths)
+                    stage_ms['face_static'] = int(round((time.perf_counter() - _t) * 1000))
                     if static_result.get('has_static_face'):
                         adjustment = self.face_detector.compute_static_adjustment(
                             static_result['face_static_score']
@@ -260,7 +274,9 @@ class MotionDetector:
             clahe_result = None
             if self.clahe_enabled and result == 'pass':
                 try:
+                    _t = time.perf_counter()
                     clahe_ssims = self._calc_clahe_ssim_similarities(image_paths)
+                    stage_ms['clahe'] = int(round((time.perf_counter() - _t) * 1000))
                     if clahe_ssims and ssim_sims:
                         clahe_avg = self._aggregate_pairs(clahe_ssims)
                         ssim_orig_avg = self._aggregate_pairs(ssim_sims)
@@ -293,7 +309,9 @@ class MotionDetector:
             block_result = None
             if self.block_static_enabled and result == 'pass':
                 try:
+                    _t = time.perf_counter()
                     block_ratios = self._calc_block_static_ratio(image_paths)
+                    stage_ms['block_static'] = int(round((time.perf_counter() - _t) * 1000))
                     if block_ratios:
                         min_ratio = min(block_ratios)
                         if min_ratio > self.block_min_static_ratio:
@@ -320,6 +338,9 @@ class MotionDetector:
                     logger.warning("分块静态检测失败: %s", e)
 
             elapsed = round(time.time() - start_time, 2)
+            elapsed_ms = int(round((time.perf_counter() - overall_start) * 1000))
+            logger.info("动态检测完成: result=%s, fusion_score=%.4f, elapsed=%dms, stages=%s",
+                        result, final_score, elapsed_ms, stage_ms)
 
             result_dict = {
                 "status": "success",
@@ -336,6 +357,8 @@ class MotionDetector:
                 },
                 "message": f"融合评分: {final_score:.2%}, 判定: {result_map[result]}",
                 "elapsed_seconds": elapsed,
+                "elapsed_ms": elapsed_ms,
+                "stage_ms": stage_ms,
             }
 
             # 人脸检测信息仅在实际使用时附加（向后兼容）

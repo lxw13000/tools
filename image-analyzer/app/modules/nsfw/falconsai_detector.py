@@ -48,7 +48,7 @@ class FalconsaiDetector:
                 if key in t:
                     self.thresholds[key] = float(t[key])
 
-        logger.info("FalconsaiDetector 初始化完成, model_dir=%s", self.model_dir)
+        logger.info("Falconsai: 模型地址 = %s", self.model_dir)
 
     @staticmethod
     def check_files(model_dir: str) -> bool:
@@ -79,7 +79,8 @@ class FalconsaiDetector:
             if self._pipeline is not None:
                 return
             try:
-                logger.info("Falconsai: 开始加载模型 pipeline")
+                logger.info("Falconsai: 开始加载模型")
+                load_start = time.perf_counter()
                 from transformers import pipeline, AutoModelForImageClassification, AutoImageProcessor
                 model = AutoModelForImageClassification.from_pretrained(
                     self.model_dir, local_files_only=True
@@ -93,7 +94,8 @@ class FalconsaiDetector:
                     image_processor=image_processor,
                     device="cpu",
                 )
-                logger.info("Falconsai: 模型 pipeline 加载完成")
+                load_ms = int(round((time.perf_counter() - load_start) * 1000))
+                logger.info("Falconsai: 模型加载完成，耗时 %dms", load_ms)
             except Exception:
                 self._load_failed = True
                 logger.exception("Falconsai: 模型加载失败，已标记熔断")
@@ -113,7 +115,7 @@ class FalconsaiDetector:
         t = thresholds if thresholds else self.thresholds
 
         try:
-            start = time.time()
+            start = time.perf_counter()
             self._load()
             file_size = os.path.getsize(image_path)
 
@@ -150,15 +152,18 @@ class FalconsaiDetector:
                 action, action_text = 'pass', '放行'
                 details = []
 
-            elapsed = round(time.time() - start, 2)
-            logger.info("Falconsai: action=%s, nsfw=%.4f, elapsed=%.2fs",
-                        action, nsfw_score, elapsed)
+            elapsed_seconds_raw = time.perf_counter() - start
+            elapsed = round(elapsed_seconds_raw, 2)
+            elapsed_ms = int(round(elapsed_seconds_raw * 1000))
+            logger.info("Falconsai: action=%s, nsfw=%.4f, elapsed=%dms (%.2fs)",
+                        action, nsfw_score, elapsed_ms, elapsed)
 
             return {
                 'status': 'success',
                 'model': 'Falconsai ViT',
                 'model_id': 'falconsai',
                 'elapsed_seconds': elapsed,
+                'elapsed_ms': elapsed_ms,
                 'image_size': file_size,
                 'raw_scores': scores,
                 'content_type': None,

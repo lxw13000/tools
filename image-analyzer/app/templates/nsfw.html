@@ -239,6 +239,30 @@ const TH_BINARY=[
 ];
 
 let currentThresholds={};
+// 服务端默认值（来自 /api/nsfw/config，按模型分组）
+let serverDefaults={mobilenet:{},opennsfw2:{},falconsai:{},fusion:{}};
+
+/* 选取当前模型/模式对应的默认阈值（百分比 int），优先服务端、回退前端硬编码 */
+function pickDefaultsForCurrentModel(){
+  const model=allModels.find(m=>m.id===selectedModel);
+  const isMobilenet=model&&model.output==='5class';
+  const defs=isMobilenet?TH_MOBILENET:TH_BINARY;
+  // 融合模式下"二分类"阈值统一取 opennsfw2 / falconsai 中先有的一份
+  const binarySrc=serverDefaults.falconsai&&Object.keys(serverDefaults.falconsai).length
+    ? serverDefaults.falconsai : serverDefaults.opennsfw2;
+  const src=isMobilenet?serverDefaults.mobilenet:binarySrc;
+  const result={};
+  defs.forEach(d=>{
+    const v=src&&src[d.key]!==undefined?Math.round(src[d.key]*100):d.def;
+    result[d.key]=v;
+  });
+  return result;
+}
+
+function applyDefaultsToCurrentThresholds(){
+  const defs=pickDefaultsForCurrentModel();
+  Object.keys(defs).forEach(k=>{currentThresholds[k]=defs[k]});
+}
 
 function renderThresholds(){
   const model=allModels.find(m=>m.id===selectedModel);
@@ -276,26 +300,29 @@ function renderThresholds(){
 fusionToggle.addEventListener('change',()=>{
   fusionMode=fusionToggle.checked;
   renderModels();
+  applyDefaultsToCurrentThresholds();
+  renderThresholds();
 });
 
 /* ---- load config ---- */
 fetch('/api/nsfw/config').then(r=>r.json()).then(d=>{
   defaults=d;
-  Object.keys(d).forEach(k=>{
-    currentThresholds[k]=Math.round(d[k]*100);
-  });
+  // 兼容旧版顶层平铺（mobilenet 阈值），同时取分组结构
+  serverDefaults={
+    mobilenet:d.mobilenet||{porn:d.porn,hentai:d.hentai,sexy:d.sexy,porn_hentai:d.porn_hentai},
+    opennsfw2:d.opennsfw2||{},
+    falconsai:d.falconsai||{},
+    fusion:d.fusion||{},
+  };
+  applyDefaultsToCurrentThresholds();
   renderThresholds();
-}).catch(()=>{});
+}).catch(()=>{
+  applyDefaultsToCurrentThresholds();
+  renderThresholds();
+});
 
 document.getElementById('thReset').addEventListener('click',()=>{
-  const model=allModels.find(m=>m.id===selectedModel);
-  const isMobilenet=model&&model.output==='5class';
-  const defs=isMobilenet?TH_MOBILENET:TH_BINARY;
-  // 优先使用服务端默认值，回退到前端硬编码默认值
-  defs.forEach(d=>{
-    const serverVal=defaults[d.key]!==undefined?Math.round(defaults[d.key]*100):null;
-    currentThresholds[d.key]=serverVal!==null?serverVal:d.def;
-  });
+  applyDefaultsToCurrentThresholds();
   renderThresholds();
 });
 
@@ -331,6 +358,7 @@ function renderModels(){
         }else{
           selectedModel=m.id;
           renderModels();
+          applyDefaultsToCurrentThresholds();
           renderThresholds();
         }
       });
@@ -347,6 +375,7 @@ fetch('/api/nsfw/models').then(r=>r.json()).then(models=>{
   }
   models.forEach(m=>{if(m.available) checkedModels.add(m.id)});
   renderModels();
+  applyDefaultsToCurrentThresholds();
   renderThresholds();
 }).catch(()=>{modelGrid.innerHTML='<div style="color:#9ca3af;font-size:.85em">加载模型列表失败</div>'});
 
@@ -433,6 +462,14 @@ detectBtn.addEventListener('click',async()=>{
 
 /* ---- result rendering helpers ---- */
 const actMap={block:'拦截',review:'复审',pass:'放行'};
+
+/* 格式化耗时：优先用毫秒，回退到秒；输入 data 为 result 对象 */
+function fmtElapsed(d){
+  if(!d) return '';
+  if(d.elapsed_ms!=null) return d.elapsed_ms+'ms';
+  if(d.elapsed_seconds!=null) return d.elapsed_seconds+'s';
+  return '';
+}
 
 function buildSafetyBars(safety){
   if(!safety) return '';
@@ -542,7 +579,7 @@ function addResult(data,thumb,name,clientSize){
         <div class="rc-meta">
           <span>${data.model||''}</span>
           <span>${imgSize}</span>
-          <span>${data.elapsed_seconds||''}s</span>
+          <span>${fmtElapsed(data)}</span>
           <span>${now}</span>
         </div>
         <button class="rc-redetect" onclick="redetect(this)">&#x21bb; 重新检测</button>
@@ -602,7 +639,8 @@ function addFusionResult(data,thumb,name,clientSize){
       modelsHtml+=buildSafetyBars(mr.safety);
       if(mr.content_type) modelsHtml+=buildContentBars(mr.content_type);
       modelsHtml+=buildRawScores(mr.raw_scores,subRawId);
-      if(mr.elapsed_seconds) modelsHtml+=`<div style="font-size:.72em;color:#9ca3af;margin-top:2px">耗时: ${mr.elapsed_seconds}s</div>`;
+      const subElapsed=fmtElapsed(mr);
+      if(subElapsed) modelsHtml+=`<div style="font-size:.72em;color:#9ca3af;margin-top:2px">耗时: ${subElapsed}</div>`;
     }
     modelsHtml+='</div>';
   }
@@ -616,7 +654,7 @@ function addFusionResult(data,thumb,name,clientSize){
       </div>
       <div style="display:flex;align-items:center;gap:10px">
         <div class="rc-meta">
-          <span>${data.elapsed_seconds||''}s</span>
+          <span>${fmtElapsed(data)}</span>
           <span>${now}</span>
         </div>
         <button class="rc-redetect" onclick="redetect(this)">&#x21bb; 重新检测</button>

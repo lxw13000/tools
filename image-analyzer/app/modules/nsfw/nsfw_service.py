@@ -98,10 +98,18 @@ class NsfwService:
                 }
 
         Returns:
-            dict: 检测结果 JSON
+            dict: 检测结果 JSON，包含以下耗时字段：
+                - total_elapsed_ms:    总耗时（毫秒，从入口到 return 前）
+                - download_elapsed_ms: 图片下载耗时（毫秒）
+                - detect_elapsed_ms:   模型推理耗时（毫秒；融合模式下含全部参与模型）
+                - total_elapsed_seconds: 总耗时（秒，保留向后兼容）
         """
         request_id = uuid.uuid4().hex[:12]
+        # perf_counter 用于高精度毫秒计时；time.time 仅用于保持原 elapsed_seconds 兼容
+        req_start = time.perf_counter()
         start_time = time.time()
+        download_elapsed_ms = 0
+        detect_elapsed_ms = 0
 
         logger.info("[%s] 收到检测请求, imgUrl=%s, modelStrategy=%s",
                     request_id, img_url, model_strategy)
@@ -109,7 +117,12 @@ class NsfwService:
         # ---- 参数校验 ----
         if not img_url or not isinstance(img_url, str) or not img_url.strip():
             logger.warning("[%s] imgUrl 参数为空", request_id)
-            return {"status": "error", "message": "imgUrl 不能为空"}, 400
+            total_ms = int(round((time.perf_counter() - req_start) * 1000))
+            return {
+                "status": "error",
+                "message": "imgUrl 不能为空",
+                "total_elapsed_ms": total_ms,
+            }, 400
 
         img_url = img_url.strip()
 
@@ -122,30 +135,44 @@ class NsfwService:
         acquired = self._semaphore.acquire(timeout=self.queue_timeout)
         if not acquired:
             elapsed = round(time.time() - start_time, 2)
-            logger.warning("[%s] 服务繁忙，排队超时 %ds, elapsed=%.2fs",
-                           request_id, self.queue_timeout, elapsed)
+            total_ms = int(round((time.perf_counter() - req_start) * 1000))
+            logger.warning("[%s] 服务繁忙，排队超时 %ds, elapsed=%dms",
+                           request_id, self.queue_timeout, total_ms)
             return {
                 "status": "error",
                 "message": f"服务繁忙，请稍后重试（排队超时 {self.queue_timeout}s）",
                 "request_id": request_id,
                 "elapsed_seconds": elapsed,
+                "total_elapsed_ms": total_ms,
             }, 503
 
         filepath = None
         try:
             # ---- 下载图片 ----
+            download_start = time.perf_counter()
             filepath, download_err = self._download_image(img_url, request_id)
+            download_elapsed_ms = int(round((time.perf_counter() - download_start) * 1000))
+            logger.info("[%s] 图片下载%s，耗时 %dms",
+                        request_id,
+                        "成功" if filepath is not None else "失败",
+                        download_elapsed_ms)
+
             if filepath is None:
                 elapsed = round(time.time() - start_time, 2)
+                total_ms = int(round((time.perf_counter() - req_start) * 1000))
                 return {
                     "status": "error",
                     "message": download_err or "图片下载失败",
                     "request_id": request_id,
                     "imgUrl": img_url,
                     "elapsed_seconds": elapsed,
+                    "total_elapsed_ms": total_ms,
+                    "download_elapsed_ms": download_elapsed_ms,
+                    "detect_elapsed_ms": 0,
                 }, 400
 
             # ---- 执行检测 ----
+            detect_start = time.perf_counter()
             if model_id == 'fusion':
                 result = self._detect_fusion(
                     filepath, models, thresholds, request_id
@@ -154,29 +181,49 @@ class NsfwService:
                 result = self._detect_single(
                     filepath, model_id, thresholds, request_id
                 )
+            detect_elapsed_ms = int(round((time.perf_counter() - detect_start) * 1000))
 
             elapsed = round(time.time() - start_time, 2)
+            total_ms = int(round((time.perf_counter() - req_start) * 1000))
 
             # 补充服务层信息
             result['request_id'] = request_id
             result['imgUrl'] = img_url
             result['total_elapsed_seconds'] = elapsed
+            result['total_elapsed_ms'] = total_ms
+            result['download_elapsed_ms'] = download_elapsed_ms
+            result['detect_elapsed_ms'] = detect_elapsed_ms
 
-            logger.info("[%s] 检测完成, action=%s, elapsed=%.2fs",
-                        request_id, result.get('action', result.get('fusion', {}).get('action', 'N/A')),
-                        elapsed)
+            # 融合模式下从结果中提取各模型耗时，方便上层透传日志
+            per_model_ms = result.get('per_model_ms')
+            action_log = result.get('action', result.get('fusion', {}).get('action', 'N/A'))
+            if per_model_ms:
+                logger.info("[%s] 检测完成, action=%s, total=%dms "
+                            "(下载=%dms / 检测=%dms), per_model_ms=%s",
+                            request_id, action_log, total_ms,
+                            download_elapsed_ms, detect_elapsed_ms, per_model_ms)
+            else:
+                logger.info("[%s] 检测完成, action=%s, total=%dms "
+                            "(下载=%dms / 检测=%dms)",
+                            request_id, action_log, total_ms,
+                            download_elapsed_ms, detect_elapsed_ms)
 
             return result, 200
 
         except Exception as e:
             elapsed = round(time.time() - start_time, 2)
-            logger.exception("[%s] 检测过程发生未预期异常", request_id)
+            total_ms = int(round((time.perf_counter() - req_start) * 1000))
+            logger.exception("[%s] 检测过程发生未预期异常, total=%dms",
+                             request_id, total_ms)
             return {
                 "status": "error",
                 "message": f"检测服务内部错误: {str(e)}",
                 "request_id": request_id,
                 "imgUrl": img_url,
                 "elapsed_seconds": elapsed,
+                "total_elapsed_ms": total_ms,
+                "download_elapsed_ms": download_elapsed_ms,
+                "detect_elapsed_ms": detect_elapsed_ms,
             }, 500
 
         finally:

@@ -76,10 +76,10 @@ motion_detection:
 nsfw_detection:
   # MobileNet V2 140 (5-class) 阈值
   thresholds:
-    porn: 0.8           # 色情 > 此值 → 拦截
-    hentai: 0.7         # 动漫色情 > 此值 → 复审
+    porn: 0.9           # 色情 > 此值 → 拦截
+    hentai: 0.9         # 动漫色情 > 此值 → 复审
     sexy: 0.85           # 性感 > 此值 → 复审
-    porn_hentai: 0.75   # 色情+动漫 组合 > 此值 → 拦截
+    porn_hentai: 0.9   # 色情+动漫 组合 > 此值 → 拦截
 
   # OpenNSFW2 (Yahoo) 阈值
   opennsfw2:

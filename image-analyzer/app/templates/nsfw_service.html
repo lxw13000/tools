@@ -307,8 +307,19 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
     html += '<div class="rc-meta">';
     if (data.model) html += `<span>${data.model}</span>`;
     if (data.request_id) html += `<span>ID: ${data.request_id}</span>`;
-    if (data.total_elapsed_seconds != null) html += `<span>总耗时 ${data.total_elapsed_seconds}s</span>`;
-    if (data.elapsed_seconds != null && !data.total_elapsed_seconds) html += `<span>耗时 ${data.elapsed_seconds}s</span>`;
+    // 总耗时（优先毫秒，回退到秒）
+    if (data.total_elapsed_ms != null) {
+      html += `<span>总耗时 ${data.total_elapsed_ms}ms</span>`;
+    } else if (data.total_elapsed_seconds != null) {
+      html += `<span>总耗时 ${data.total_elapsed_seconds}s</span>`;
+    } else if (data.elapsed_ms != null) {
+      html += `<span>耗时 ${data.elapsed_ms}ms</span>`;
+    } else if (data.elapsed_seconds != null) {
+      html += `<span>耗时 ${data.elapsed_seconds}s</span>`;
+    }
+    // 下载 / 检测 分段耗时
+    if (data.download_elapsed_ms != null) html += `<span>下载 ${data.download_elapsed_ms}ms</span>`;
+    if (data.detect_elapsed_ms != null) html += `<span>检测 ${data.detect_elapsed_ms}ms</span>`;
     html += '</div></div>';
 
     // ---- 错误消息 ----
@@ -369,6 +380,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
           html += '<div class="model-sub-result">';
           html += '<div class="model-sub-head">';
           html += `<span class="model-sub-name">${mr.model || mid}</span>`;
+          // 模型耗时（优先毫秒）
+          const mMs = mr.elapsed_ms != null
+            ? `${mr.elapsed_ms}ms`
+            : (mr.elapsed_seconds != null ? `${mr.elapsed_seconds}s` : '');
+          if (mMs) html += `<span style="font-size:.72em;color:#9ca3af;margin-left:auto;margin-right:8px">${mMs}</span>`;
           if (mr.action) html += `<span class="rc-badge ${mr.action}" style="font-size:.68em">${mr.action_text || mr.action}</span>`;
           html += '</div>';
           // 子模型安全分类

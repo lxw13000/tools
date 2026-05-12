@@ -141,8 +141,23 @@ def get_nsfw_models():
 
 @app.route('/api/nsfw/config', methods=['GET'])
 def get_nsfw_config():
-    """GET /api/nsfw/config — 返回 MobileNet 默认阈值（供前端渲染滑块初始值）"""
-    return jsonify(nsfw_detector.get_default_thresholds())
+    """
+    GET /api/nsfw/config — 返回所有模型的默认阈值（供前端渲染滑块初始值）
+
+    返回结构（与 config.yaml 中的 nsfw_detection 一致）：
+        {
+            "mobilenet": {porn, hentai, sexy, porn_hentai},
+            "opennsfw2": {nsfw_block, nsfw_review},
+            "falconsai": {nsfw_block, nsfw_review},
+            "fusion":    {weights{...}, thresholds{block, review}, strategy},
+            # 顶层兼容字段（仅 mobilenet 阈值，旧前端可直接取）
+            "porn": ..., "hentai": ..., "sexy": ..., "porn_hentai": ...,
+        }
+    """
+    all_defaults = nsfw_detector.get_all_default_thresholds()
+    # 兼容旧前端：顶层平铺 mobilenet 阈值
+    result = {**all_defaults['mobilenet'], **all_defaults}
+    return jsonify(result)
 
 
 @app.route('/api/motion/config', methods=['GET'])

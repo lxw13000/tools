@@ -93,7 +93,7 @@ class FusionDetector:
                        safety{色情,正常[,性感]}, content_type, model_results, elapsed_seconds}
                 失败: {status:'error', message, model_results, elapsed_seconds}
         """
-        start = time.time()
+        start = time.perf_counter()
 
         if not models:
             models = ['opennsfw2', 'mobilenet', 'falconsai']
@@ -104,6 +104,7 @@ class FusionDetector:
         # ---- 逐模型调用检测 ----
         model_results = {}       # 各模型的完整检测结果
         safety_scores = {}       # 各模型的色情分数（用于详情输出）
+        per_model_ms = {}        # 各模型的耗时（ms），用于日志和返回
         weight_sum = 0.0         # 成功模型的权重总和（用于色情分数归一化）
         weighted_porn_sum = 0.0  # 色情分数加权和
         weighted_sexy_sum = 0.0  # 性感分数加权和（仅来自支持性感分类的模型）
@@ -113,14 +114,21 @@ class FusionDetector:
         for model_id in models:
             # 从 thresholds 中取出该模型对应的阈值（如果调用方传入了）
             model_th = thresholds.get(model_id) if thresholds else None
+            model_start = time.perf_counter()
             result = self.nsfw_detector.detect(
                 image_path, model_id=model_id, thresholds=model_th
             )
+            # 外层兜底耗时：若模型未返回 elapsed_ms（如初始化失败），用外层差值补齐
+            outer_ms = int(round((time.perf_counter() - model_start) * 1000))
+            if 'elapsed_ms' not in result:
+                result['elapsed_ms'] = outer_ms
+            per_model_ms[model_id] = result.get('elapsed_ms', outer_ms)
             model_results[model_id] = result
 
             # 跳过检测失败的模型（不参与融合计算）
             if result.get('status') != 'success':
-                logger.warning("融合检测: 模型 %s 检测失败, 跳过", model_id)
+                logger.warning("融合检测: 模型 %s 检测失败, 跳过, elapsed=%dms",
+                               model_id, per_model_ms[model_id])
                 continue
 
             # 提取该模型的安全分类分数
@@ -144,12 +152,16 @@ class FusionDetector:
 
         # 所有模型均失败，无法融合
         if weight_sum == 0:
-            logger.warning("融合检测: 所有模型均检测失败, 无法融合")
+            logger.warning("融合检测: 所有模型均检测失败, 无法融合, per_model_ms=%s",
+                           per_model_ms)
+            elapsed_seconds_raw = time.perf_counter() - start
             return {
                 'status': 'error',
                 'message': '没有可用的模型结果',
                 'model_results': model_results,
-                'elapsed_seconds': round(time.time() - start, 2),
+                'elapsed_seconds': round(elapsed_seconds_raw, 2),
+                'elapsed_ms': int(round(elapsed_seconds_raw * 1000)),
+                'per_model_ms': per_model_ms,
             }
 
         # ---- 计算融合分数 ----
@@ -232,11 +244,15 @@ class FusionDetector:
             details.append(f"融合性感: {final_sexy:.2%}")
         details.append(f"综合分数: {combined_score:.2%}")
 
-        elapsed = round(time.time() - start, 2)
+        elapsed_seconds_raw = time.perf_counter() - start
+        elapsed = round(elapsed_seconds_raw, 2)
+        elapsed_ms = int(round(elapsed_seconds_raw * 1000))
         logger.info("融合检测: 完成, action=%s, strategy=%s, combined_score=%.4f, "
-                     "final_porn=%.4f, final_sexy=%s, model_scores=%s, elapsed=%.2fs",
+                     "final_porn=%.4f, final_sexy=%s, model_scores=%s, "
+                     "per_model_ms=%s, elapsed=%dms (%.2fs)",
                      action, self.strategy, combined_score,
-                     final_porn, final_sexy, safety_scores, elapsed)
+                     final_porn, final_sexy, safety_scores,
+                     per_model_ms, elapsed_ms, elapsed)
 
         return {
             'status': 'success',
@@ -254,4 +270,6 @@ class FusionDetector:
             'safety': fused_safety,
             'model_results': model_results,
             'elapsed_seconds': elapsed,
+            'elapsed_ms': elapsed_ms,
+            'per_model_ms': per_model_ms,
         }

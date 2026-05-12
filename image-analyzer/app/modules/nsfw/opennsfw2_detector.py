@@ -41,7 +41,7 @@ class OpenNSFW2Detector:
                 if key in t:
                     self.thresholds[key] = float(t[key])
 
-        logger.info("OpenNSFW2Detector 初始化完成, weights_path=%s", self.weights_path)
+        logger.info("OpenNSFW2: 模型地址 = %s", self.weights_path)
 
     @staticmethod
     def check_files(weights_path: str) -> bool:
@@ -77,10 +77,12 @@ class OpenNSFW2Detector:
                         f"OpenNSFW2 权重文件不存在: {self.weights_path}，"
                         f"请下载 open_nsfw_weights.h5 至该路径"
                     )
-                logger.info("OpenNSFW2: 开始加载模型, weights=%s", self.weights_path)
+                logger.info("OpenNSFW2: 开始加载模型")
+                load_start = time.perf_counter()
                 import opennsfw2 as n2
                 self._model = n2.make_open_nsfw_model(weights_path=self.weights_path)
-                logger.info("OpenNSFW2: 模型加载完成")
+                load_ms = int(round((time.perf_counter() - load_start) * 1000))
+                logger.info("OpenNSFW2: 模型加载完成，耗时 %dms", load_ms)
             except Exception:
                 self._load_failed = True
                 logger.exception("OpenNSFW2: 模型加载失败，已标记熔断")
@@ -100,7 +102,7 @@ class OpenNSFW2Detector:
         t = thresholds if thresholds else self.thresholds
 
         try:
-            start = time.time()
+            start = time.perf_counter()
             self._ensure_loaded()
 
             import opennsfw2 as n2
@@ -125,7 +127,9 @@ class OpenNSFW2Detector:
             normal_prob = round(float(predictions[0][0]), 4)
 
             file_size = os.path.getsize(image_path)
-            elapsed = round(time.time() - start, 2)
+            elapsed_seconds_raw = time.perf_counter() - start
+            elapsed = round(elapsed_seconds_raw, 2)
+            elapsed_ms = int(round(elapsed_seconds_raw * 1000))
 
             # 阈值判定
             block_th = t.get('nsfw_block', 0.8)
@@ -141,14 +145,15 @@ class OpenNSFW2Detector:
                 action, action_text = 'pass', '放行'
                 details = []
 
-            logger.info("OpenNSFW2: action=%s, nsfw=%.4f, elapsed=%.2fs",
-                        action, nsfw_prob, elapsed)
+            logger.info("OpenNSFW2: action=%s, nsfw=%.4f, elapsed=%dms (%.2fs)",
+                        action, nsfw_prob, elapsed_ms, elapsed)
 
             return {
                 'status': 'success',
                 'model': 'OpenNSFW2 (Yahoo)',
                 'model_id': 'opennsfw2',
                 'elapsed_seconds': elapsed,
+                'elapsed_ms': elapsed_ms,
                 'image_size': file_size,
                 'raw_scores': {'nsfw': nsfw_prob, 'normal': normal_prob},
                 'content_type': None,
