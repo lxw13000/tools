@@ -40,7 +40,7 @@ motion_detection:
     high_risk: 0.95  # 融合评分 >= 此值 → 高风险挂播（确定挂播，精确优先）
     mid_risk: 0.87   # 融合评分 >= 此值 → 中风险挂播（很可能挂播）
     review: 0.78     # 融合评分 >= 此值 → 人工复核（疑似，需人工确认）
-                     # 融合评分 < 此值 → 通过
+    # 融合评分 < 此值 → 通过
   # 算法调优参数
   target_size: 512            # SSIM / 光流缩放目标尺寸（越大越精确但越慢）
   phash_hash_size: 16         # pHash 哈希边长（16→256bit，精细判别）
@@ -76,22 +76,22 @@ motion_detection:
 nsfw_detection:
   # MobileNet V2 140 (5-class) 阈值
   thresholds:
-    porn: 0.6           # 色情 > 此值 → 拦截
-    hentai: 0.5         # 动漫色情 > 此值 → 复审
-    sexy: 0.7           # 性感 > 此值 → 复审
-    porn_hentai: 0.65   # 色情+动漫 组合 > 此值 → 拦截
+    porn: 0.8           # 色情 > 此值 → 拦截
+    hentai: 0.7         # 动漫色情 > 此值 → 复审
+    sexy: 0.85           # 性感 > 此值 → 复审
+    porn_hentai: 0.75   # 色情+动漫 组合 > 此值 → 拦截
 
   # OpenNSFW2 (Yahoo) 阈值
   opennsfw2:
     thresholds:
-      nsfw_block: 0.8   # NSFW >= 此值 → 拦截
-      nsfw_review: 0.5  # NSFW >= 此值 → 复审
+      nsfw_block: 0.9   # NSFW >= 此值 → 拦截
+      nsfw_review: 0.7  # NSFW >= 此值 → 复审
 
   # Falconsai ViT 阈值
   falconsai:
     thresholds:
-      nsfw_block: 0.8   # NSFW >= 此值 → 拦截
-      nsfw_review: 0.5  # NSFW >= 此值 → 复审
+      nsfw_block: 0.9   # NSFW >= 此值 → 拦截
+      nsfw_review: 0.7  # NSFW >= 此值 → 复审
 
   # 多模型融合配置
   fusion:
@@ -100,8 +100,8 @@ nsfw_detection:
       mobilenet: 0.30   # MobileNet V2 140 权重
       falconsai: 0.45   # Falconsai ViT 权重（最准确，权重最高）
     thresholds:
-      block: 0.7        # 融合分数 >= 此值 → 拦截
-      review: 0.4       # 融合分数 >= 此值 → 复审
+      block: 0.85        # 融合分数 >= 此值 → 拦截
+      review: 0.7       # 融合分数 >= 此值 → 复审
     strategy: "weighted_average"  # weighted_average | any_block | majority
 
 # 定时检测服务配置
@@ -112,8 +112,8 @@ scheduler:
     base_url: "http://47.128.144.26:18001/prod-api"   # 第三方服务基础地址
     fetch_path: "/sano/dyCheck/data"        # GET 拉取待检测数据
     callback_path: "/sano/dyCheck/call/check"  # POST 回调检测结果
-  timeout: 30                   # HTTP 请求超时（秒）
-  image_download_timeout: 15    # 图片下载超时（秒）
+  timeout: 10                   # HTTP 请求超时（秒）
+  image_download_timeout: 5    # 图片下载超时（秒）
   # risk_mid 已废弃，风险阈值统一由 motion_detection.thresholds 管理
   max_history: 50               # 可视化页面保留的最近执行记录数
 
@@ -127,9 +127,9 @@ nsfw_service:
   #   - mobilenet   MobileNet V2 140 (5 分类) 单模型
   #   - fusion      多模型融合检测（综合 falconsai + opennsfw2 + mobilenet，最稳健但最慢）
   default_model_id: "opennsfw2"
-  max_concurrent: 5             # 最大并发检测数（信号量限流）
-  queue_timeout: 30             # 排队等待超时（秒），超时返回 503
-  download_timeout: 15          # 图片下载超时（秒）
+  max_concurrent: 20             # 最大并发检测数（信号量限流）
+  queue_timeout: 10             # 排队等待超时（秒），超时返回 503
+  download_timeout: 3          # 图片下载超时（秒）
   max_file_size: 52428800       # 图片最大大小 50MB（字节）
   # SSRF 白名单网段：默认拦截所有内网/回环地址，列在此处的网段例外放行
   # 对应代码：app/modules/nsfw_service.py 的 _is_ssrf_ip()
