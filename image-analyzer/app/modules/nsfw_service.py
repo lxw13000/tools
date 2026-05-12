@@ -8,7 +8,7 @@ NSFW 内容安全检测服务
   - 信号量限流：限制同时执行的检测任务数量，防止 CPU/内存耗尽
   - 排队超时：信号量等待超时直接返回 503，防止请求堆积雪崩
   - 图片下载超时 + 大小限制：防止慢连接和超大文件阻塞
-  - URL 安全校验：仅允许 http/https，阻止私有地址 SSRF 攻击
+  - URL 安全校验：仅允许 http/https，目标 IP 必须命中白名单（纯白名单模式）
   - 下载后图片格式验证：确保文件为有效图片再交给模型
   - 全链路 try/except：每个环节独立捕获异常，不影响其他业务
   - 临时文件强制清理：finally 块确保磁盘不泄漏
@@ -57,14 +57,15 @@ class NsfwService:
         # 默认模型 ID：请求未传 modelStrategy 或缺 modelId 时的兜底（见 _parse_strategy）
         self.default_model_id = svc_config.get('default_model_id', 'falconsai')
 
-        # SSRF 白名单网段：列在此处的内网/回环段例外放行（见 _is_ssrf_ip）
+        # IP 白名单网段（纯白名单模式）：仅允许图片 URL 解析到的目标 IP 命中此处配置的网段
+        # 未配置或全部解析失败 → 一律拒绝（见 _is_ip_allowed）
         # 解析失败的条目记 warning 后跳过，不阻断启动
-        self.allowed_internal_nets = []
-        for net_str in svc_config.get('allowed_internal_nets', []) or []:
+        self.ip_whitelist = []
+        for net_str in svc_config.get('ip_whitelist', []) or []:
             try:
-                self.allowed_internal_nets.append(ipaddress.ip_network(net_str, strict=False))
+                self.ip_whitelist.append(ipaddress.ip_network(net_str, strict=False))
             except (ValueError, TypeError) as e:
-                logger.warning("allowed_internal_nets 配置项无效 '%s': %s", net_str, e)
+                logger.warning("ip_whitelist 配置项无效 '%s': %s", net_str, e)
 
         # 临时文件存放目录
         self.upload_folder = self.config.get('upload', {}).get('folder', '/tmp/uploads')
@@ -76,10 +77,10 @@ class NsfwService:
         logger.info(
             "NsfwService 初始化完成, default_model_id=%s, max_concurrent=%d, "
             "queue_timeout=%ds, download_timeout=%ds, max_file_size=%dMB, "
-            "allowed_internal_nets=%s",
+            "ip_whitelist=%s",
             self.default_model_id, self.max_concurrent, self.queue_timeout,
             self.download_timeout, self.max_file_size // (1024 * 1024),
-            [str(n) for n in self.allowed_internal_nets] or '无',
+            [str(n) for n in self.ip_whitelist] or '无（将拒绝所有图片 URL）',
         )
 
     def check(self, img_url, model_strategy=None):
@@ -212,54 +213,40 @@ class NsfwService:
                     request_id, model_id, models, strategy)
         return model_id, models, strategy, thresholds
 
-    # SSRF 防护：仅拦截真正的内网/回环地址段
-    # 不使用 ipaddress.is_private（会误杀 198.18.0.0/15 等 CDN 常用段）
-    _SSRF_BLOCKED_NETS = [
-        ipaddress.ip_network('127.0.0.0/8'),       # IPv4 回环
-        ipaddress.ip_network('10.0.0.0/8'),         # RFC 1918 A 类内网
-        ipaddress.ip_network('172.16.0.0/12'),      # RFC 1918 B 类内网
-        ipaddress.ip_network('192.168.0.0/16'),     # RFC 1918 C 类内网
-        ipaddress.ip_network('169.254.0.0/16'),     # IPv4 链路本地
-        ipaddress.ip_network('0.0.0.0/8'),          # 当前网络
-        ipaddress.ip_network('::1/128'),            # IPv6 回环
-        ipaddress.ip_network('fe80::/10'),          # IPv6 链路本地
-        ipaddress.ip_network('fc00::/7'),           # IPv6 ULA 内网
-    ]
-
-    @classmethod
-    def _is_ssrf_ip(cls, hostname, allowed_nets=None):
+    @staticmethod
+    def _is_ip_allowed(hostname, allowed_nets):
         """
-        检查主机名是否解析到内网/回环地址（防止 SSRF 攻击）
+        检查主机名解析到的 IP 是否全部命中白名单网段（纯白名单模式）
 
-        仅拦截 RFC 1918 内网段、回环地址、链路本地地址。
-        不使用 Python ipaddress.is_private（会误判 198.18.0.0/15 等 CDN 常用段）。
-        DNS 解析失败不拦截，交给后续 HTTP 请求自然报错。
+        所有解析结果必须都在白名单内才放行；任一 IP 不在白名单 → 拒绝。
+        白名单为空、DNS 返回空、DNS 解析失败 → 一律拒绝（无法验证即拒绝）。
 
         Args:
             hostname:     URL 中的主机名
-            allowed_nets: 业务方配置的白名单网段列表（ip_network 对象），
-                          IP 命中黑名单时若同时命中白名单则放行
+            allowed_nets: 白名单网段列表（ip_network 对象）
+
+        Returns:
+            bool: True 为放行，False 为拒绝
         """
-        allowed = allowed_nets or []
+        if not allowed_nets:
+            return False  # 未配置白名单 → 一律拒绝
+
         try:
             addr_info = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
             if not addr_info:
-                return False
-            # 任一 IP 在白名单或不在黑名单 → 放行整个主机名
-            for family, _, _, _, sockaddr in addr_info:
+                return False  # DNS 返回空 → 拒绝
+
+            for _, _, _, _, sockaddr in addr_info:
                 ip = ipaddress.ip_address(sockaddr[0])
-                in_blocked = any(ip in net for net in cls._SSRF_BLOCKED_NETS)
-                in_allowed = any(ip in net for net in allowed)
-                if in_allowed or not in_blocked:
-                    return False
-            # 所有解析结果均为内网地址且不在白名单
+                if not any(ip in net for net in allowed_nets):
+                    return False  # 任一解析 IP 不在白名单 → 拒绝
             return True
         except (socket.gaierror, ValueError):
-            return False
+            return False  # DNS 解析失败或地址非法 → 拒绝
 
     def _validate_url(self, img_url, request_id):
         """
-        校验 URL 合法性：协议白名单 + 私有 IP 拦截
+        校验 URL 合法性：协议白名单 + 目标 IP 白名单（纯白名单模式）
 
         Returns:
             (parsed, error_msg) — parsed 为 urlparse 结果，校验失败时 parsed=None
@@ -275,9 +262,9 @@ class NsfwService:
             logger.warning("[%s] URL 缺少主机名: %s", request_id, img_url)
             return None, "URL 格式无效：缺少主机名"
 
-        if self._is_ssrf_ip(hostname, self.allowed_internal_nets):
-            logger.warning("[%s] URL 指向内网地址被拦截: %s", request_id, hostname)
-            return None, "不允许访问内网地址"
+        if not self._is_ip_allowed(hostname, self.ip_whitelist):
+            logger.warning("[%s] URL 目标 IP 不在白名单中被拦截: %s", request_id, hostname)
+            return None, "图片 URL 目标 IP 不在白名单中"
 
         return parsed, None
 

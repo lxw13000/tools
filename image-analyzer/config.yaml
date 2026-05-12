@@ -131,9 +131,13 @@ nsfw_service:
   queue_timeout: 10             # 排队等待超时（秒），超时返回 503
   download_timeout: 3          # 图片下载超时（秒）
   max_file_size: 52428800       # 图片最大大小 50MB（字节）
-  # SSRF 白名单网段：默认拦截所有内网/回环地址，列在此处的网段例外放行
-  # 对应代码：app/modules/nsfw_service.py 的 _is_ssrf_ip()
-  # 仅当业务方的图床/对象存储位于内网时填写，留空保持严格拦截
+  # IP 白名单网段（纯白名单模式）：仅允许图片 URL 解析到的目标 IP 命中此处配置的网段
+  # 留空或未配置 → 拒绝所有图片 URL（必须显式配置才能使用本服务）
+  # 对应代码：app/modules/nsfw_service.py 的 _is_ip_allowed()
   # 支持 CIDR 写法，可写单 IP（host 段用 /32）或子网段
-  allowed_internal_nets:
+  # 常用示例：
+  #   - "0.0.0.0/0"         # 允许所有 IPv4（等同于关闭限制，仅在受信任环境使用）
+  #   - "172.31.0.0/16"     # 内网段
+  #   - "203.0.113.5/32"    # 单 IP
+  ip_whitelist:
     - "172.31.0.0/16"   # 业务图床所在内网段
